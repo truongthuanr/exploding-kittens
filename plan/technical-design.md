@@ -2,7 +2,9 @@
 
 ## 1. Mục tiêu kỹ thuật
 
-Thiết kế một kiến trúc đủ đơn giản để hoàn thành MVP nhanh, nhưng không khóa đường scale nếu game có nhiều room hoặc nhiều instance backend về sau.
+Thiết kế một hệ thống đủ đơn giản để hoàn thành MVP nhanh, nhưng vẫn có đường nâng cấp rõ ràng khi số lượng room, người chơi đồng thời hoặc số instance backend tăng lên.
+
+Tài liệu này đóng vai trò `system design doc` cho dự án. Bên trong đó, phần `System Architecture` mô tả cấu trúc high-level; các phần còn lại mô tả realtime flow, state ownership, reconnect, persistence và scale strategy.
 
 ## 2. Stack mục tiêu
 
@@ -15,9 +17,12 @@ Thiết kế một kiến trúc đủ đơn giản để hoàn thành MVP nhanh,
 
 ### Backend
 
-- `Node.js`
-- `Socket.IO`
-- `TypeScript`
+- `Python 3.12+`
+- `FastAPI`
+- `python-socketio`
+- `asyncio`
+- `Pydantic`
+- `SQLAlchemy`
 
 ### Data
 
@@ -26,48 +31,89 @@ Thiết kế một kiến trúc đủ đơn giản để hoàn thành MVP nhanh,
 
 ### Phase sau
 
-- `Redis` cho pub/sub, session coordination và room state distribution nếu scale multi-instance
+- `Redis` cho pub/sub, session coordination và room state distribution khi scale multi-instance
 
-## 3. Kiến trúc tổng thể
+## 3. System Architecture
 
-### Frontend responsibility
+### Architecture overview
 
-- Trang home, create/join room, lobby, game board, result screen
-- Quản lý local UI state và socket lifecycle
-- Render public state và private hand của current player
-- Gửi user intents lên server, không tự resolve luật
+Hệ thống được chia thành 4 khối chính:
 
-### Backend responsibility
+- `Web Client`: UI game, lobby, room join, action panel, reconnect logic.
+- `Realtime Backend`: xử lý room lifecycle, game engine, validation, broadcast state.
+- `Persistent Storage`: lưu user metadata, room history, match history.
+- `Future Cache Layer`: Redis cho session registry, room registry và cross-instance messaging khi scale.
 
-- Room lifecycle
-- Session management
-- Game state authoritative
-- Action validation
-- Rule resolution
-- Broadcasting filtered state
-- Reconnect handling
+### High-level flow
 
-### Database responsibility
+1. Người chơi mở web client và tạo/join room.
+2. Frontend kết nối tới backend qua `Socket.IO`.
+3. Backend tạo hoặc restore session, đưa player vào room.
+4. Khi game bắt đầu, backend giữ toàn bộ game state authoritative.
+5. Client chỉ gửi user intent như `play_card`, `draw_card`, `ready`.
+6. Backend validate, resolve luật game, rồi broadcast state đã lọc cho từng người chơi.
 
-`PostgreSQL` dùng cho:
+### Trách nhiệm từng lớp
 
-- User profile tối thiểu nếu sau này có auth
-- Room history / match history
-- Analytics hoặc audit records nếu cần
+`Frontend`
+- Render room, lobby, game board, result screen.
+- Quản lý local UI state và socket lifecycle.
+- Hiển thị public state và private hand của chính người chơi.
+- Không tự resolve luật game.
 
-MVP không bắt buộc persist toàn bộ live game state vào database.
+`Backend`
+- Quản lý room lifecycle.
+- Quản lý player sessions và reconnect.
+- Giữ game state authoritative.
+- Validate actions, resolve rules, emit public/private payload.
 
-## 4. System components
+`Database`
+- Lưu dữ liệu bền vững cần giữ sau khi process restart.
+- Không phải nguồn chân lý cho live game state của MVP.
+
+## 4. Infrastructure / Deployment
+
+### MVP deployment
+
+- `Frontend`: deploy trên `Vercel`.
+- `Backend`: 1 service Python duy nhất chạy `FastAPI + python-socketio`.
+- `Database`: `PostgreSQL` managed service.
+- `TLS / reverse proxy`: để platform hosting quản lý.
+
+### MVP infra principles
+
+- Ưu tiên một backend instance để tránh phức tạp với room ownership và sticky sessions.
+- Live game state giữ trong RAM của backend.
+- PostgreSQL chỉ lưu metadata và match results, không lưu mọi state transition trong trận.
+
+### Khi nào cần nâng cấp infra
+
+Thêm lớp scale khi bắt đầu có một trong các dấu hiệu sau:
+
+- nhiều room chạy đồng thời
+- backend cần nhiều replicas
+- cần survive process restart tốt hơn
+- cần cross-instance broadcasting
+
+### Production-lite sau MVP
+
+- Frontend vẫn giữ trên `Vercel`
+- Backend tăng lên nhiều replicas
+- Thêm `Redis`
+- PostgreSQL tiếp tục giữ persistence
+
+## 5. System Components
 
 ### Web client
 
 - Join room bằng `roomCode`
-- Lưu session token tạm thời ở browser storage
-- Reconnect socket nếu mất kết nối
+- Lưu `playerSessionId` ở browser storage
+- Tự reconnect socket khi mất kết nối
+- Render private hand và public table state
 
 ### Realtime gateway
 
-- Nhận và phát sự kiện `Socket.IO`
+- Nhận và phát sự kiện qua `python-socketio`
 - Ánh xạ socket vào `playerSessionId`
 - Route event tới `room service` và `game engine`
 
@@ -94,21 +140,26 @@ MVP không bắt buộc persist toàn bộ live game state vào database.
 - Gắn socket mới vào player cũ
 - Thu hồi session cũ khi takeover
 
-## 5. Authoritative state model
+### Persistence layer
 
-Backend lưu hai lớp state:
+- Ghi room metadata
+- Ghi match result
+- Hỗ trợ future analytics nếu cần
+
+## 6. Authoritative State Model
+
+Backend lưu ba lớp state chính:
 
 ### Room state
 
-```ts
-type RoomState = {
-  roomId: string;
-  roomCode: string;
-  status: "waiting" | "starting" | "in_game" | "finished";
-  hostPlayerId: string;
-  playerIds: string[];
-  createdAt: string;
-};
+```python
+class RoomState(TypedDict):
+    room_id: str
+    room_code: str
+    status: Literal["waiting", "starting", "in_game", "finished"]
+    host_player_id: str
+    player_ids: list[str]
+    created_at: str
 ```
 
 ### Game state
@@ -117,25 +168,29 @@ Dùng `ServerGameState` như đã chốt trong [game-engine-spec.md](/home/thuan
 
 ### Player session state
 
-```ts
-type PlayerSession = {
-  playerSessionId: string;
-  playerId: string;
-  roomId: string;
-  socketId: string | null;
-  connected: boolean;
-  lastSeenAt: string;
-};
+```python
+class PlayerSession(TypedDict):
+    player_session_id: str
+    player_id: str
+    room_id: str
+    socket_id: str | None
+    connected: bool
+    last_seen_at: str
 ```
 
-## 6. Broadcast strategy
+### Ownership rule
+
+- Server giữ toàn bộ `drawPile`, `discardPile`, hand của tất cả người chơi và turn state.
+- Client chỉ giữ UI state và hand của chính mình.
+- Database không phải source of truth cho live state ở MVP.
+
+## 7. Realtime Communication Design
+
+### Broadcast strategy
 
 Server không broadcast cùng một payload cho mọi người chơi trong các case có hidden information.
 
-### Public room/game payload
-
-Gửi cho cả phòng:
-
+`Public payload`
 - player list
 - player statuses
 - hand counts
@@ -145,15 +200,12 @@ Gửi cho cả phòng:
 - log events
 - winner
 
-### Private payload
-
-Gửi riêng cho từng player:
-
+`Private payload`
 - own hand
 - `See the Future` result
 - reconnect bootstrap payload
 
-### Recommended pattern
+### Recommended emit pattern
 
 - Sau mỗi action, backend build:
   - `publicGameState`
@@ -161,7 +213,9 @@ Gửi riêng cho từng player:
 - Broadcast `publicGameState` cho room
 - Emit riêng `privateState` cho từng player khi cần
 
-## 7. Socket event contract
+### Socket event contract
+
+Mặc dù backend dùng Python, event names và payload contract vẫn giữ ổn định cho frontend TypeScript. Backend nên map payload vào `Pydantic models` để validate trước khi đi vào game engine.
 
 ## Client -> server events
 
@@ -340,14 +394,14 @@ type ErrorEvent = {
 };
 ```
 
-## 8. Reconnect strategy
+## 8. Reconnect Strategy
 
 ### Mục tiêu
 
 - Player reload tab hoặc mất socket tạm thời không bị mất ghế.
 - Reconnect phải khôi phục đúng tay bài riêng của người đó.
 
-### Cách làm
+### Flow
 
 - Khi tạo/join room, server cấp `playerSessionId`.
 - Client lưu `playerSessionId` trong browser storage.
@@ -363,23 +417,13 @@ type ErrorEvent = {
 - Chỉ một socket active cho một `playerSessionId`.
 - Nếu socket mới reconnect với cùng session, socket cũ bị vô hiệu hóa.
 
-## 9. Anti-cheat basic
-
-MVP không cần anti-cheat nặng, nhưng phải có các guard bắt buộc:
-
-- Không tin payload client về card type hay deck order.
-- Chỉ nhận `cardId`, mọi thuộc tính lá bài được lookup từ server state.
-- Validate turn ownership cho mọi action.
-- Reject duplicate action bằng `requestId` hoặc action lock.
-- Không gửi hidden data cho sai player.
-
-## 10. Error handling và concurrency
+## 9. Concurrency, Validation, and Anti-Cheat
 
 ### Action lock
 
 - Trong khi resolve một action, set `actionLock = true`.
-- Reject hoặc queue mọi action khác cho tới khi resolution hoàn tất.
-- MVP nên chọn reject thay vì queue để đơn giản hóa hệ thống.
+- Reject mọi action khác cho tới khi resolution hoàn tất.
+- MVP chọn `reject`, không queue action.
 
 ### Idempotency
 
@@ -390,7 +434,20 @@ MVP không cần anti-cheat nặng, nhưng phải có các guard bắt buộc:
 
 - Nếu disconnect xảy ra sau khi action đã tới server, server vẫn resolve xong rồi mới đánh dấu player disconnected.
 
-## 11. Persistence strategy
+### Anti-cheat guards
+
+- Không tin payload client về card type hay deck order.
+- Chỉ nhận `cardId`; mọi thuộc tính lá bài phải lookup từ server state.
+- Validate turn ownership cho mọi action.
+- Không gửi hidden data cho sai player.
+
+### Python-specific synchronization
+
+- Chạy game loop theo `asyncio`; mọi socket handler phải là `async def`.
+- Không dùng global mutable state không có guard.
+- Dùng `asyncio.Lock` theo `roomId` để serialize action resolution trong từng phòng.
+
+## 10. Persistence Strategy
 
 ### MVP
 
@@ -400,20 +457,20 @@ MVP không cần anti-cheat nặng, nhưng phải có các guard bắt buộc:
 ### Hạn chế chấp nhận ở MVP
 
 - Nếu backend process restart, mọi trận đang chạy bị mất.
-- Chấp nhận vì mục tiêu là build MVP nhanh.
+- Đây là trade-off chấp nhận được để giữ hệ thống đơn giản ở bản đầu.
 
-## 12. Hướng scale lên Redis / multi-instance
+## 11. Scaling Strategy
 
 Khi có nhiều room hoặc cần nhiều backend instances:
 
 - Chuyển room registry và session registry sang `Redis`.
-- Dùng `Socket.IO Redis adapter` để broadcast xuyên instance.
-- Tách persistence match history thành async job.
-- Nếu live game state cần survive process crash, serialize `ServerGameState` vào Redis theo room key.
+- Dùng `python-socketio` với Redis manager để broadcast xuyên instance.
+- Nếu cần survive process restart tốt hơn, serialize `ServerGameState` vào Redis theo `roomId`.
+- Tách ghi match history thành async background job.
 
 Không cần broker riêng ở MVP. `Redis` là bước scale đầu tiên hợp lý hơn `RabbitMQ` hoặc `Kafka` cho hệ thống này.
 
-## 13. Folder responsibility ở mức cao
+## 12. Folder Responsibility
 
 ### Frontend
 
@@ -424,13 +481,15 @@ Không cần broker riêng ở MVP. `Redis` là bước scale đầu tiên hợp
 
 ### Backend
 
-- `src/rooms/`: room service và room models
-- `src/game/`: game engine, card effects, validators
-- `src/socket/`: event gateway
-- `src/sessions/`: reconnect/session management
-- `src/types/`: shared transport và state types
+- `app/api/`: FastAPI app bootstrap, health endpoints, dependency wiring
+- `app/socket/`: `python-socketio` server, event handlers, room broadcast helpers
+- `app/rooms/`: room service và room models
+- `app/game/`: game engine, card effects, validators
+- `app/sessions/`: reconnect/session management
+- `app/schemas/`: Pydantic request/response models
+- `app/db/`: SQLAlchemy models, session factory, repositories
 
-## 14. Technical test plan
+## 13. Technical Test Plan
 
 - Tạo/join room và broadcast lobby state đúng.
 - Chỉ host được `game:start`.
