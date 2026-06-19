@@ -196,14 +196,15 @@ Server không broadcast cùng một payload cho mọi người chơi trong các 
 - hand counts
 - current turn
 - pending draws
-- discard summary
-- log events
+- discard summary (`discardTopCardType`, `discardCount`)
+- log events / `recentAction`
 - winner
 
 `Private payload`
 - own hand
 - `See the Future` result
 - reconnect bootstrap payload
+- bất kỳ hidden card information nào không được lộ cho cả phòng
 
 ### Recommended emit pattern
 
@@ -215,7 +216,7 @@ Server không broadcast cùng một payload cho mọi người chơi trong các 
 
 ### Socket event contract
 
-Mặc dù backend dùng Python, event names và payload contract vẫn giữ ổn định cho frontend TypeScript. Backend nên map payload vào `Pydantic models` để validate trước khi đi vào game engine.
+Mặc dù backend dùng Python, event names và payload contract vẫn giữ ổn định cho frontend TypeScript. Backend nên map payload vào `Pydantic models` để validate trước khi đi vào game engine. Canonical wire-level contract nên được giữ trong một thư mục shared như `shared/contracts/`, với field names dạng `camelCase` và enum values dạng `snake_case`.
 
 ## Client -> server events
 
@@ -227,12 +228,34 @@ type RoomCreateRequest = {
 };
 ```
 
+Ack thành công cho event này nên trả về:
+
+```ts
+type RoomCreateResponse = {
+  roomId: string;
+  roomCode: string;
+  playerId: string;
+  playerSessionId: string;
+};
+```
+
 ### `room:join`
 
 ```ts
 type RoomJoinRequest = {
   roomCode: string;
   nickname: string;
+};
+```
+
+Ack thành công cho event này nên trả về:
+
+```ts
+type RoomJoinResponse = {
+  roomId: string;
+  roomCode: string;
+  playerId: string;
+  playerSessionId: string;
 };
 ```
 
@@ -270,16 +293,6 @@ type DrawCardRequest = {
 };
 ```
 
-### `turn:defuse`
-
-Event này tồn tại trong contract để rõ nghĩa, nhưng ở MVP server không yêu cầu client chủ động gửi. Nếu client có gửi thì server nên từ chối hoặc bỏ qua.
-
-```ts
-type DefuseRequest = {
-  requestId?: string;
-};
-```
-
 ### `player:reconnect`
 
 ```ts
@@ -289,6 +302,21 @@ type ReconnectRequest = {
 ```
 
 ## Server -> client events
+
+```ts
+type ActionType =
+  | "start_game"
+  | "play_skip"
+  | "play_attack"
+  | "play_shuffle"
+  | "play_see_the_future"
+  | "play_favor"
+  | "draw_card"
+  | "defuse"
+  | "explode"
+  | "eliminate"
+  | "turn_advanced";
+```
 
 ### `room:updated`
 
@@ -347,12 +375,14 @@ type PublicGameStateEvent = {
   winnerPlayerId: string | null;
   recentAction: {
     actorPlayerId: string;
-    actionType: string;
+    actionType: ActionType;
     targetPlayerId?: string;
     summary: string;
   } | null;
 };
 ```
+
+Trong MVP, `game:state` không được chứa hidden data như full `discardPile`, hand của player khác, hay card type player hiện tại nhận được từ `Favor`.
 
 ### `player:private-state`
 
@@ -366,6 +396,8 @@ type PlayerPrivateStateEvent = {
   visibleFutureCards: CardType[] | null;
 };
 ```
+
+Trong MVP, `player:private-state` là nơi duy nhất chứa hidden card information của đúng player đó.
 
 ### `player:eliminated`
 

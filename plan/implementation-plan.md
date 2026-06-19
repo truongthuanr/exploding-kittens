@@ -64,12 +64,17 @@ Dựng bộ khung project và chốt contract dùng chung để backend và fron
   - `GamePhase`
   - `CardType`
   - `PlayerStatus`
+- Chốt canonical wire-level contract location, ví dụ `shared/contracts/`.
 - Tạo request/response schemas cho các socket events chính.
+- Chốt ack responses cho `room:create` và `room:join`, bao gồm `playerSessionId`.
+- Loại `turn:defuse` khỏi MVP socket contract.
+- Chốt ranh giới public/private payload cho hidden information.
 - Chốt folder structure mức tối thiểu cho backend và frontend.
 
 **Deliverables**
 
 - Repo có thể cài dependencies và chạy riêng frontend/backend.
+- Có `shared/contracts/` cho TypeScript wire-level contracts.
 - Có schema models cho socket payloads.
 - Có README hoặc note ngắn mô tả cách chạy local.
 
@@ -81,6 +86,7 @@ Dựng bộ khung project và chốt contract dùng chung để backend và fron
 
 - Có thể start backend server và frontend dev server độc lập.
 - Shared contract đã được tạo và không mâu thuẫn với `technical-design.md`.
+- Backend có thể validate incoming socket payloads bằng schema models ngay từ gateway layer.
 
 ### Phase 2: Backend core
 
