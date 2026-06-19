@@ -134,17 +134,25 @@ Implementer có thể điều chỉnh con số này nếu playtest thấy nhịp
 - Danh sách người chơi
 - `currentPlayerId`
 - `pendingDraws`
-- `discardPile` hoặc top discard summary
+- `discardTopCardType` và `discardCount`
 - `turnNumber`
 - Trạng thái room/game
 - Ai bị loại
 - Kết quả action vừa resolve
+
+Public broadcast không được chứa hidden card information, bao gồm:
+
+- hand đầy đủ của bất kỳ player nào
+- full `discardPile`
+- kết quả `See the Future` của player khác
+- card type mà player hiện tại vừa nhận được từ `Favor`
 
 ### State riêng từng player
 
 - Hand của chính họ
 - Kết quả `See the Future` do chính họ tạo ra
 - Session metadata phục vụ reconnect
+- Hidden card information khác chỉ thuộc về đúng player đó
 
 ## 6. Turn lifecycle
 
