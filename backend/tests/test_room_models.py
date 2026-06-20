@@ -59,7 +59,7 @@ def test_room_state_maps_to_room_updated_event() -> None:
     assert payload.roomId == "room-1"
     assert payload.roomCode == "ABCD12"
     assert payload.status == RoomStatus.WAITING
-    assert payload.players == [
+    assert [player.model_dump() for player in payload.players] == [
         {
             "playerId": "player-1",
             "nickname": "alice",
