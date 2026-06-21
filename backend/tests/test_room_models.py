@@ -33,6 +33,22 @@ def test_room_state_not_joinable_when_not_waiting() -> None:
     assert room.is_joinable() is False
 
 
+def test_room_state_not_joinable_when_room_is_full() -> None:
+    players = [
+        RoomPlayerState(player_id=f"player-{index}", nickname=f"player-{index}")
+        for index in range(1, 6)
+    ]
+    room = RoomState(
+        room_id="room-1",
+        room_code="ABCD12",
+        host_player_id="player-1",
+        players=players,
+        status=RoomStatus.WAITING,
+    )
+
+    assert room.is_joinable() is False
+
+
 def test_room_state_maps_to_room_updated_event() -> None:
     host = RoomPlayerState(
         player_id="player-1",

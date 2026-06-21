@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from app.modules.room.constants import MAX_ROOM_PLAYERS
 from app.schemas.enums import PlayerStatus, RoomStatus
 from app.schemas.responses import RoomPlayer, RoomUpdatedEvent
 
@@ -40,7 +41,7 @@ class RoomState:
         return any(player.nickname == nickname for player in self.players)
 
     def is_joinable(self) -> bool:
-        return self.status == RoomStatus.WAITING
+        return self.status == RoomStatus.WAITING and len(self.players) < MAX_ROOM_PLAYERS
 
     def is_host_player(self, player_id: str) -> bool:
         return self.host_player_id == player_id
