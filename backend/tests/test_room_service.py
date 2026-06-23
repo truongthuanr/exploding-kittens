@@ -6,9 +6,10 @@ from app.modules.room.errors import (
     RoomNotJoinableError,
     RoomNotWaitingError,
 )
+from app.modules.room.mappers import to_room_updated_event
 from app.modules.room.registry import RoomRegistry
 from app.modules.room.service import RoomService
-from app.schemas.enums import RoomStatus
+from app.schemas.enums import PlayerStatus, RoomStatus
 
 
 class StubRoomService(RoomService):
@@ -93,3 +94,33 @@ def test_set_ready_rejects_player_not_in_room() -> None:
 
     with pytest.raises(PlayerNotInRoomError):
         service.set_ready(created.room.room_id, "missing-player", True)
+
+
+def test_mapper_converts_room_state_to_room_updated_event() -> None:
+    service = StubRoomService()
+    created = service.create_room("alice")
+    joined = service.join_room(created.room.room_code, "bob")
+    created.player.is_ready = True
+    joined.player.status = PlayerStatus.DISCONNECTED
+
+    payload = to_room_updated_event(created.room)
+
+    assert payload.roomId == "room-1"
+    assert payload.roomCode == "ABCD12"
+    assert payload.status == RoomStatus.WAITING
+    assert [player.model_dump() for player in payload.players] == [
+        {
+            "playerId": "player-1",
+            "nickname": "alice",
+            "isReady": True,
+            "isHost": True,
+            "status": PlayerStatus.CONNECTED,
+        },
+        {
+            "playerId": "player-2",
+            "nickname": "bob",
+            "isReady": False,
+            "isHost": False,
+            "status": PlayerStatus.DISCONNECTED,
+        },
+    ]
