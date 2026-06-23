@@ -37,7 +37,7 @@ flowchart TD
     B --> C[Room Registry]
     B --> D[Room Model]
     B --> E[Room Errors]
-    D --> F[Room Mapper]
+    A --> F[Room Mapper]
     F --> G[WebSocket Event Payload]
 ```
 

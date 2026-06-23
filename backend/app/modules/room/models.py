@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 
 from app.modules.room.constants import MAX_ROOM_PLAYERS
 from app.schemas.enums import PlayerStatus, RoomStatus
-from app.schemas.responses import RoomPlayer, RoomUpdatedEvent
 
 
 @dataclass(slots=True)
@@ -14,15 +13,6 @@ class RoomPlayerState:
     nickname: str
     is_ready: bool = False
     status: PlayerStatus = PlayerStatus.CONNECTED
-
-    def to_room_player(self, *, is_host: bool) -> RoomPlayer:
-        return RoomPlayer(
-            playerId=self.player_id,
-            nickname=self.nickname,
-            isReady=self.is_ready,
-            isHost=is_host,
-            status=self.status,
-        )
 
 
 @dataclass(slots=True)
@@ -45,14 +35,3 @@ class RoomState:
 
     def is_host_player(self, player_id: str) -> bool:
         return self.host_player_id == player_id
-
-    def to_room_updated_event(self) -> RoomUpdatedEvent:
-        return RoomUpdatedEvent(
-            roomId=self.room_id,
-            roomCode=self.room_code,
-            status=self.status,
-            players=[
-                player.to_room_player(is_host=self.is_host_player(player.player_id))
-                for player in self.players
-            ],
-        )
