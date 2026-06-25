@@ -16,6 +16,32 @@ Add session tracking so reconnect and socket ownership can be implemented cleanl
 - `plan/implementation-plan.md`
 - `plan/technical-design.md`
 
+## Module design
+Plain-text flow:
+
+```text
+websocket handler
+    -> session service
+        -> session registry
+        -> session model
+        -> session errors
+    -> room/application orchestration
+    -> websocket emit
+```
+
+Mermaid:
+
+```mermaid
+flowchart TD
+    A[WebSocket Handler] --> B[Session Service]
+    B --> C[Session Registry]
+    B --> D[Session Model]
+    B --> E[Session Errors]
+    A --> F[Room or Application Orchestration]
+    F --> G[Room State Update]
+    A --> H[WebSocket Emit]
+```
+
 ## Session boundary
 - `session` module owns player session identity and socket binding state.
 - A session represents which client currently owns a player connection for reconnect purposes.
