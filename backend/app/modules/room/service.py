@@ -5,17 +5,23 @@ from random import SystemRandom
 from string import ascii_uppercase, digits
 from uuid import uuid4
 
+from app.modules.room.constants import MAX_ROOM_PLAYERS, MIN_ROOM_PLAYERS
 from app.modules.room.errors import (
     DuplicateNicknameError,
     DuplicateRoomCodeError,
+    NotEnoughPlayersError,
+    NotHostError,
     PlayerNotInRoomError,
+    PlayersDisconnectedError,
+    PlayersNotReadyError,
+    RoomFullError,
     RoomNotFoundError,
     RoomNotJoinableError,
     RoomNotWaitingError,
 )
 from app.modules.room.models import RoomPlayerState, RoomState
 from app.modules.room.registry import RoomRegistry
-from app.schemas.enums import RoomStatus
+from app.schemas.enums import PlayerStatus, RoomStatus
 
 ROOM_CODE_LENGTH = 6
 ROOM_CODE_ALPHABET = ascii_uppercase + digits
@@ -46,8 +52,10 @@ class RoomService:
     def join_room(self, room_code: str, nickname: str) -> RoomOperationResult:
         normalized_room_code = room_code.upper()
         room = self.registry.get_by_code(normalized_room_code)
-        if not room.is_joinable():
+        if room.status is not RoomStatus.WAITING:
             raise RoomNotJoinableError(room.room_id)
+        if len(room.players) >= MAX_ROOM_PLAYERS:
+            raise RoomFullError(room.room_id)
         if room.has_nickname(nickname):
             raise DuplicateNicknameError(nickname)
 
@@ -65,6 +73,28 @@ class RoomService:
             raise PlayerNotInRoomError(player_id, room.room_id)
 
         player.is_ready = is_ready
+        return room
+
+    def validate_start_preconditions(self, room_id: str, player_id: str) -> RoomState:
+        room = self.registry.get_by_id(room_id)
+        if room.status is not RoomStatus.WAITING:
+            raise RoomNotWaitingError(room.room_id)
+        if not room.is_host_player(player_id):
+            raise NotHostError(player_id)
+
+        player_count = len(room.players)
+        if player_count < MIN_ROOM_PLAYERS or player_count > MAX_ROOM_PLAYERS:
+            raise NotEnoughPlayersError(room.room_id, player_count)
+        if any(not player.is_ready for player in room.players):
+            raise PlayersNotReadyError(room.room_id)
+        if any(player.status is not PlayerStatus.CONNECTED for player in room.players):
+            raise PlayersDisconnectedError(room.room_id)
+
+        return room
+
+    def transition_to_starting(self, room_id: str, player_id: str) -> RoomState:
+        room = self.validate_start_preconditions(room_id, player_id)
+        room.status = RoomStatus.STARTING
         return room
 
     def _generate_room_id(self) -> str:
