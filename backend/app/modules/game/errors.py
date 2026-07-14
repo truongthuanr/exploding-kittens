@@ -73,6 +73,22 @@ class PendingResolutionError(GameError):
         self.room_id = room_id
 
 
+class NoPendingExplosionError(GameError):
+    def __init__(self, room_id: str) -> None:
+        super().__init__(f"Game has no pending explosion for room: {room_id}")
+        self.room_id = room_id
+
+
+class InvalidExplosionStateError(GameError):
+    def __init__(self, room_id: str, phase: str, action_lock: bool) -> None:
+        super().__init__(
+            f"Invalid explosion state for room: {room_id}; phase: {phase}; action_lock: {action_lock}"
+        )
+        self.room_id = room_id
+        self.phase = phase
+        self.action_lock = action_lock
+
+
 class InvalidPendingDrawsError(GameError):
     def __init__(self, pending_draws: int) -> None:
         super().__init__(f"Invalid pending draws: {pending_draws}")

@@ -76,6 +76,8 @@ class TurnLifecycleOutcome(StrEnum):
     GAME_FINISHED = "game_finished"
     SKIP_PLAYED = "skip_played"
     ATTACK_PLAYED = "attack_played"
+    DEFUSED = "defused"
+    PLAYER_ELIMINATED = "player_eliminated"
 
 
 @dataclass(slots=True)
