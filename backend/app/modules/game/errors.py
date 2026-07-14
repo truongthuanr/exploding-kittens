@@ -38,6 +38,23 @@ class PlayerDisconnectedError(GameError):
         self.player_id = player_id
 
 
+class CardNotInHandError(GameError):
+    def __init__(self, player_id: str, card_id: str) -> None:
+        super().__init__(f"Card not found in player hand: {card_id} for player: {player_id}")
+        self.player_id = player_id
+        self.card_id = card_id
+
+
+class InvalidCardTypeError(GameError):
+    def __init__(self, card_id: str, expected_card_type: str, actual_card_type: str) -> None:
+        super().__init__(
+            f"Invalid card type for card: {card_id}; expected: {expected_card_type}; actual: {actual_card_type}"
+        )
+        self.card_id = card_id
+        self.expected_card_type = expected_card_type
+        self.actual_card_type = actual_card_type
+
+
 class InvalidTurnPhaseError(GameError):
     def __init__(self, phase: str) -> None:
         super().__init__(f"Invalid turn phase: {phase}")

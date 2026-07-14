@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.modules.game.errors import (
+    CardNotInHandError,
     EmptyDrawPileError,
     GameNotFoundError,
     GameNotInProgressError,
+    InvalidCardTypeError,
     InvalidPendingDrawsError,
     InvalidTurnPhaseError,
     NotCurrentPlayerError,
@@ -16,6 +18,7 @@ from app.modules.game.errors import (
     TurnActionLockedError,
 )
 from app.modules.game.models import (
+    CardInstance,
     GamePlayerSummary,
     GameRuntimeState,
     PlayerPrivateState,
@@ -79,8 +82,96 @@ class TurnLifecycleService:
             request_id=request_id,
         )
 
+    def play_skip(
+        self,
+        room_id: str,
+        player_id: str,
+        card_id: str,
+        request_id: str | None = None,
+    ) -> TurnLifecycleResult:
+        runtime = self.registry.get(room_id)
+        if runtime is None:
+            raise GameNotFoundError(room_id)
+
+        card = validate_action_card_request(runtime, player_id, card_id, CardType.SKIP)
+        _discard_card_from_hand(runtime, player_id, card)
+
+        state = runtime.game_state
+        state.pending_draws -= 1
+
+        if state.pending_draws > 0:
+            state.phase = GamePhase.TURN_ACTION
+            state.updated_at = utc_now_iso()
+            outcome = TurnLifecycleOutcome.SKIP_PLAYED
+        else:
+            turn_outcome = complete_turn(runtime)
+            if turn_outcome is TurnLifecycleOutcome.GAME_FINISHED:
+                outcome = TurnLifecycleOutcome.GAME_FINISHED
+            else:
+                outcome = TurnLifecycleOutcome.SKIP_PLAYED
+
+        return TurnLifecycleResult(
+            outcome=outcome,
+            runtime=runtime,
+            player_id=player_id,
+            request_id=request_id,
+        )
+
+    def play_attack(
+        self,
+        room_id: str,
+        player_id: str,
+        card_id: str,
+        request_id: str | None = None,
+    ) -> TurnLifecycleResult:
+        runtime = self.registry.get(room_id)
+        if runtime is None:
+            raise GameNotFoundError(room_id)
+
+        card = validate_action_card_request(runtime, player_id, card_id, CardType.ATTACK)
+        inherited_pending_draws = runtime.game_state.pending_draws + 1
+        _discard_card_from_hand(runtime, player_id, card)
+
+        turn_outcome = complete_turn(runtime, pending_draws_for_next=inherited_pending_draws)
+        if turn_outcome is TurnLifecycleOutcome.GAME_FINISHED:
+            outcome = TurnLifecycleOutcome.GAME_FINISHED
+        else:
+            outcome = TurnLifecycleOutcome.ATTACK_PLAYED
+
+        return TurnLifecycleResult(
+            outcome=outcome,
+            runtime=runtime,
+            player_id=player_id,
+            request_id=request_id,
+        )
+
 
 def validate_draw_request(runtime: GameRuntimeState, player_id: str) -> None:
+    _validate_active_turn(runtime, player_id)
+
+    if not runtime.game_state.draw_pile:
+        raise EmptyDrawPileError(runtime.game_state.room_id)
+
+
+def validate_action_card_request(
+    runtime: GameRuntimeState,
+    player_id: str,
+    card_id: str,
+    expected_card_type: CardType,
+) -> CardInstance:
+    _validate_active_turn(runtime, player_id)
+    player_private_state = _get_player_private_state(runtime, player_id)
+
+    for card in player_private_state.hand:
+        if card.card_id == card_id:
+            if card.card_type is not expected_card_type:
+                raise InvalidCardTypeError(card.card_id, expected_card_type, card.card_type)
+            return card
+
+    raise CardNotInHandError(player_id, card_id)
+
+
+def _validate_active_turn(runtime: GameRuntimeState, player_id: str) -> None:
     state = runtime.game_state
 
     if state.room_status is not RoomStatus.IN_GAME:
@@ -110,8 +201,14 @@ def validate_draw_request(runtime: GameRuntimeState, player_id: str) -> None:
     if state.pending_draws < 1:
         raise InvalidPendingDrawsError(state.pending_draws)
 
-    if not state.draw_pile:
-        raise EmptyDrawPileError(state.room_id)
+
+def _discard_card_from_hand(runtime: GameRuntimeState, player_id: str, card: CardInstance) -> None:
+    player_private_state = _get_player_private_state(runtime, player_id)
+    player_summary = _get_player_summary(runtime, player_id)
+
+    player_private_state.hand.remove(card)
+    runtime.game_state.discard_pile.append(card)
+    player_summary.hand_count -= 1
 
 
 def next_alive_player(runtime: GameRuntimeState) -> GamePlayerSummary | None:

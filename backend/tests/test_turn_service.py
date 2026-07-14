@@ -5,9 +5,11 @@ from copy import deepcopy
 import pytest
 
 from app.modules.game.errors import (
+    CardNotInHandError,
     EmptyDrawPileError,
     GameNotFoundError,
     GameNotInProgressError,
+    InvalidCardTypeError,
     InvalidPendingDrawsError,
     InvalidTurnPhaseError,
     NotCurrentPlayerError,
@@ -106,6 +108,21 @@ def assert_unchanged_after_error(runtime: GameRuntimeState, error_type: type[Exc
     assert runtime == before
 
 
+def assert_unchanged_after_action_error(
+    runtime: GameRuntimeState,
+    error_type: type[Exception],
+    player_id: str,
+    card_id: str = "player-1-hand",
+) -> None:
+    before = deepcopy(runtime)
+    service = build_service(runtime)
+
+    with pytest.raises(error_type):
+        service.play_skip("room-1", player_id, card_id)
+
+    assert runtime == before
+
+
 def test_runtime_state_from_setup_result_preserves_setup_output() -> None:
     setup_runtime = build_runtime()
     setup_result = GameSetupResult(
@@ -157,6 +174,146 @@ def test_normal_draw_with_one_pending_draw_completes_turn() -> None:
     assert runtime.game_state.turn_number == 2
     assert runtime.game_state.pending_draws == 1
     assert runtime.game_state.phase is GamePhase.TURN_ACTION
+
+
+def test_play_skip_with_one_pending_draw_discards_card_and_completes_turn() -> None:
+    runtime = build_runtime(pending_draws=1)
+    skip_card = runtime.player_private_states["player-1"].hand[0]
+    service = build_service(runtime)
+
+    result = service.play_skip("room-1", "player-1", skip_card.card_id, request_id="request-1")
+
+    assert result.outcome is TurnLifecycleOutcome.SKIP_PLAYED
+    assert result.runtime is runtime
+    assert result.player_id == "player-1"
+    assert result.request_id == "request-1"
+    assert runtime.player_private_states["player-1"].hand == []
+    assert runtime.game_state.discard_pile == [skip_card]
+    assert runtime.game_state.players[0].hand_count == 0
+    assert len(runtime.player_private_states["player-2"].hand) == 1
+    assert len(runtime.player_private_states["player-3"].hand) == 1
+    assert runtime.game_state.current_player_id == "player-2"
+    assert runtime.game_state.turn_number == 2
+    assert runtime.game_state.pending_draws == 1
+    assert runtime.game_state.phase is GamePhase.TURN_ACTION
+
+
+def test_play_skip_with_multiple_pending_draws_keeps_current_player_and_reduces_one_draw() -> None:
+    runtime = build_runtime(pending_draws=3)
+    skip_card = runtime.player_private_states["player-1"].hand[0]
+    service = build_service(runtime)
+
+    result = service.play_skip("room-1", "player-1", skip_card.card_id)
+
+    assert result.outcome is TurnLifecycleOutcome.SKIP_PLAYED
+    assert runtime.player_private_states["player-1"].hand == []
+    assert runtime.game_state.discard_pile == [skip_card]
+    assert runtime.game_state.players[0].hand_count == 0
+    assert runtime.game_state.current_player_id == "player-1"
+    assert runtime.game_state.turn_number == 1
+    assert runtime.game_state.pending_draws == 2
+    assert runtime.game_state.phase is GamePhase.TURN_ACTION
+
+
+def test_play_attack_with_one_pending_draw_hands_two_draws_to_next_player() -> None:
+    runtime = build_runtime(pending_draws=1)
+    attack_card = card("attack-card", CardType.ATTACK)
+    runtime.player_private_states["player-1"].hand = [attack_card]
+    service = build_service(runtime)
+
+    result = service.play_attack("room-1", "player-1", attack_card.card_id, request_id="request-1")
+
+    assert result.outcome is TurnLifecycleOutcome.ATTACK_PLAYED
+    assert result.runtime is runtime
+    assert result.player_id == "player-1"
+    assert result.request_id == "request-1"
+    assert runtime.player_private_states["player-1"].hand == []
+    assert runtime.game_state.discard_pile == [attack_card]
+    assert runtime.game_state.players[0].hand_count == 0
+    assert runtime.game_state.current_player_id == "player-2"
+    assert runtime.game_state.turn_number == 2
+    assert runtime.game_state.pending_draws == 2
+    assert runtime.game_state.phase is GamePhase.TURN_ACTION
+
+
+def test_play_attack_with_multiple_pending_draws_hands_old_value_plus_one_to_next_player() -> None:
+    runtime = build_runtime(pending_draws=3)
+    attack_card = card("attack-card", CardType.ATTACK)
+    runtime.player_private_states["player-1"].hand = [attack_card]
+    service = build_service(runtime)
+
+    result = service.play_attack("room-1", "player-1", attack_card.card_id)
+
+    assert result.outcome is TurnLifecycleOutcome.ATTACK_PLAYED
+    assert runtime.game_state.discard_pile == [attack_card]
+    assert runtime.game_state.current_player_id == "player-2"
+    assert runtime.game_state.turn_number == 2
+    assert runtime.game_state.pending_draws == 4
+    assert runtime.game_state.phase is GamePhase.TURN_ACTION
+
+
+def test_attack_chaining_preserves_stacking_policy() -> None:
+    runtime = build_runtime(pending_draws=1)
+    player_1_attack = card("player-1-attack", CardType.ATTACK)
+    player_2_attack = card("player-2-attack", CardType.ATTACK)
+    runtime.player_private_states["player-1"].hand = [player_1_attack]
+    runtime.player_private_states["player-2"].hand = [player_2_attack]
+    service = build_service(runtime)
+
+    first_result = service.play_attack("room-1", "player-1", player_1_attack.card_id)
+    second_result = service.play_attack("room-1", "player-2", player_2_attack.card_id)
+
+    assert first_result.outcome is TurnLifecycleOutcome.ATTACK_PLAYED
+    assert second_result.outcome is TurnLifecycleOutcome.ATTACK_PLAYED
+    assert runtime.game_state.discard_pile == [player_1_attack, player_2_attack]
+    assert runtime.game_state.players[0].hand_count == 0
+    assert runtime.game_state.players[1].hand_count == 0
+    assert runtime.game_state.current_player_id == "player-3"
+    assert runtime.game_state.turn_number == 3
+    assert runtime.game_state.pending_draws == 3
+
+
+def test_play_skip_returns_game_finished_when_no_other_player_is_alive() -> None:
+    runtime = build_runtime(
+        pending_draws=1,
+        statuses={
+            "player-2": PlayerStatus.ELIMINATED,
+            "player-3": PlayerStatus.ELIMINATED,
+        },
+        eliminated_player_ids=["player-2", "player-3"],
+    )
+    skip_card = runtime.player_private_states["player-1"].hand[0]
+    service = build_service(runtime)
+
+    result = service.play_skip("room-1", "player-1", skip_card.card_id)
+
+    assert result.outcome is TurnLifecycleOutcome.GAME_FINISHED
+    assert runtime.game_state.phase is GamePhase.FINISHED
+    assert runtime.game_state.room_status is RoomStatus.FINISHED
+    assert runtime.game_state.winner_player_id == "player-1"
+    assert runtime.game_state.discard_pile == [skip_card]
+
+
+def test_play_attack_returns_game_finished_when_no_other_player_is_alive() -> None:
+    runtime = build_runtime(
+        pending_draws=1,
+        statuses={
+            "player-2": PlayerStatus.ELIMINATED,
+            "player-3": PlayerStatus.ELIMINATED,
+        },
+        eliminated_player_ids=["player-2", "player-3"],
+    )
+    attack_card = card("attack-card", CardType.ATTACK)
+    runtime.player_private_states["player-1"].hand = [attack_card]
+    service = build_service(runtime)
+
+    result = service.play_attack("room-1", "player-1", attack_card.card_id)
+
+    assert result.outcome is TurnLifecycleOutcome.GAME_FINISHED
+    assert runtime.game_state.phase is GamePhase.FINISHED
+    assert runtime.game_state.room_status is RoomStatus.FINISHED
+    assert runtime.game_state.winner_player_id == "player-1"
+    assert runtime.game_state.discard_pile == [attack_card]
 
 
 def test_next_alive_player_wraps_around_and_skips_eliminated_players() -> None:
@@ -253,6 +410,12 @@ def test_missing_game_raises_game_not_found() -> None:
     with pytest.raises(GameNotFoundError):
         service.draw_card("missing-room", "player-1")
 
+    with pytest.raises(GameNotFoundError):
+        service.play_skip("missing-room", "player-1", "card-1")
+
+    with pytest.raises(GameNotFoundError):
+        service.play_attack("missing-room", "player-1", "card-1")
+
 
 def test_missing_player_is_rejected_without_state_mutation() -> None:
     runtime = build_runtime()
@@ -265,6 +428,64 @@ def test_pending_explosion_card_rejects_draw_without_state_mutation() -> None:
     runtime.pending_explosion_card = card("pending-bomb", CardType.EXPLODING_KITTEN)
 
     assert_unchanged_after_error(runtime, PendingResolutionError, "player-1")
+
+
+@pytest.mark.parametrize(
+    ("runtime", "player_id", "error_type"),
+    [
+        (build_runtime(), "player-2", NotCurrentPlayerError),
+        (
+            build_runtime(
+                statuses={"player-1": PlayerStatus.ELIMINATED},
+                eliminated_player_ids=["player-1"],
+            ),
+            "player-1",
+            PlayerEliminatedError,
+        ),
+        (
+            build_runtime(statuses={"player-1": PlayerStatus.DISCONNECTED}),
+            "player-1",
+            PlayerDisconnectedError,
+        ),
+        (build_runtime(action_lock=True), "player-1", TurnActionLockedError),
+        (build_runtime(phase=GamePhase.TURN_DRAW), "player-1", InvalidTurnPhaseError),
+        (build_runtime(room_status=RoomStatus.FINISHED), "player-1", GameNotInProgressError),
+        (build_runtime(pending_draws=0), "player-1", InvalidPendingDrawsError),
+    ],
+)
+def test_invalid_action_card_requests_are_rejected_without_state_mutation(
+    runtime: GameRuntimeState,
+    player_id: str,
+    error_type: type[Exception],
+) -> None:
+    assert_unchanged_after_action_error(runtime, error_type, player_id)
+
+
+def test_missing_player_action_card_request_is_rejected_without_state_mutation() -> None:
+    runtime = build_runtime()
+
+    assert_unchanged_after_action_error(runtime, PlayerNotFoundError, "missing-player")
+
+
+def test_pending_explosion_card_rejects_action_card_without_state_mutation() -> None:
+    runtime = build_runtime()
+    runtime.pending_explosion_card = card("pending-bomb", CardType.EXPLODING_KITTEN)
+
+    assert_unchanged_after_action_error(runtime, PendingResolutionError, "player-1")
+
+
+def test_card_not_in_hand_is_rejected_without_state_mutation() -> None:
+    runtime = build_runtime()
+
+    assert_unchanged_after_action_error(runtime, CardNotInHandError, "player-1", "missing-card")
+
+
+def test_wrong_card_type_for_action_is_rejected_without_state_mutation() -> None:
+    runtime = build_runtime()
+    attack_card = card("attack-card", CardType.ATTACK)
+    runtime.player_private_states["player-1"].hand = [attack_card]
+
+    assert_unchanged_after_action_error(runtime, InvalidCardTypeError, "player-1", attack_card.card_id)
 
 
 def test_exploding_kitten_draw_enters_pending_explosion_without_decrementing_pending_draws() -> None:
