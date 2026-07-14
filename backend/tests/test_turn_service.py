@@ -9,9 +9,11 @@ from app.modules.game.errors import (
     EmptyDrawPileError,
     GameNotFoundError,
     GameNotInProgressError,
+    InvalidExplosionStateError,
     InvalidCardTypeError,
     InvalidPendingDrawsError,
     InvalidTurnPhaseError,
+    NoPendingExplosionError,
     NotCurrentPlayerError,
     PendingResolutionError,
     PlayerDisconnectedError,
@@ -31,6 +33,15 @@ from app.modules.game.models import (
 from app.modules.game.registry import GameRegistry
 from app.modules.game.turn_service import TurnLifecycleService, complete_turn, next_alive_player
 from app.schemas.enums import CardType, GamePhase, PlayerStatus, RoomStatus
+
+
+class FixedRandom:
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    def randint(self, start: int, stop: int) -> int:
+        assert start <= self.value <= stop
+        return self.value
 
 
 def card(card_id: str, card_type: CardType = CardType.SKIP) -> CardInstance:
@@ -98,6 +109,32 @@ def build_service(runtime: GameRuntimeState) -> TurnLifecycleService:
     return TurnLifecycleService(registry=registry)
 
 
+def build_service_with_random(runtime: GameRuntimeState, index: int) -> TurnLifecycleService:
+    registry = GameRegistry()
+    registry.add(runtime)
+    return TurnLifecycleService(registry=registry, randomizer=FixedRandom(index))
+
+
+def prepare_pending_explosion(
+    runtime: GameRuntimeState,
+    bomb: CardInstance | None = None,
+) -> CardInstance:
+    pending_bomb = bomb or card("pending-bomb", CardType.EXPLODING_KITTEN)
+    runtime.pending_explosion_card = pending_bomb
+    runtime.game_state.phase = GamePhase.RESOLVING_EXPLOSION
+    runtime.game_state.action_lock = True
+    return pending_bomb
+
+
+def set_player_hand(runtime: GameRuntimeState, player_id: str, hand: list[CardInstance]) -> None:
+    runtime.player_private_states[player_id].hand = hand
+    for player in runtime.game_state.players:
+        if player.player_id == player_id:
+            player.hand_count = len(hand)
+            return
+    raise AssertionError(f"missing player: {player_id}")
+
+
 def assert_unchanged_after_error(runtime: GameRuntimeState, error_type: type[Exception], player_id: str) -> None:
     before = deepcopy(runtime)
     service = build_service(runtime)
@@ -119,6 +156,20 @@ def assert_unchanged_after_action_error(
 
     with pytest.raises(error_type):
         service.play_skip("room-1", player_id, card_id)
+
+    assert runtime == before
+
+
+def assert_unchanged_after_explosion_error(
+    runtime: GameRuntimeState,
+    error_type: type[Exception],
+    player_id: str,
+) -> None:
+    before = deepcopy(runtime)
+    service = build_service(runtime)
+
+    with pytest.raises(error_type):
+        service.resolve_pending_explosion("room-1", player_id)
 
     assert runtime == before
 
@@ -504,3 +555,196 @@ def test_exploding_kitten_draw_enters_pending_explosion_without_decrementing_pen
     assert runtime.game_state.pending_draws == 2
     assert bomb not in runtime.player_private_states["player-1"].hand
     assert bomb not in runtime.game_state.discard_pile
+
+
+def test_resolving_explosion_with_defuse_consumes_one_defuse_and_advances_turn() -> None:
+    bomb = card("bomb", CardType.EXPLODING_KITTEN)
+    next_card = card("next-card", CardType.SKIP)
+    defuse_card = card("defuse-card", CardType.DEFUSE)
+    runtime = build_runtime(pending_draws=1, draw_pile=[next_card])
+    prepare_pending_explosion(runtime, bomb)
+    set_player_hand(runtime, "player-1", [defuse_card])
+    service = build_service_with_random(runtime, index=1)
+
+    result = service.resolve_pending_explosion("room-1", "player-1", request_id="request-1")
+
+    assert result.outcome is TurnLifecycleOutcome.DEFUSED
+    assert result.runtime is runtime
+    assert result.player_id == "player-1"
+    assert result.request_id == "request-1"
+    assert runtime.pending_explosion_card is None
+    assert runtime.player_private_states["player-1"].hand == []
+    assert runtime.game_state.players[0].hand_count == 0
+    assert runtime.game_state.discard_pile == [defuse_card]
+    assert runtime.game_state.draw_pile == [next_card, bomb]
+    assert runtime.game_state.action_lock is False
+    assert runtime.game_state.current_player_id == "player-2"
+    assert runtime.game_state.turn_number == 2
+    assert runtime.game_state.pending_draws == 1
+    assert runtime.game_state.phase is GamePhase.TURN_ACTION
+
+
+def test_resolving_explosion_with_defuse_and_multiple_pending_draws_keeps_current_player() -> None:
+    bomb = card("bomb", CardType.EXPLODING_KITTEN)
+    next_card = card("next-card", CardType.SKIP)
+    defuse_card = card("defuse-card", CardType.DEFUSE)
+    second_defuse = card("second-defuse", CardType.DEFUSE)
+    skip_card = card("skip-card", CardType.SKIP)
+    runtime = build_runtime(pending_draws=3, draw_pile=[next_card])
+    prepare_pending_explosion(runtime, bomb)
+    set_player_hand(runtime, "player-1", [defuse_card, second_defuse, skip_card])
+    service = build_service_with_random(runtime, index=0)
+
+    result = service.resolve_pending_explosion("room-1", "player-1")
+
+    assert result.outcome is TurnLifecycleOutcome.DEFUSED
+    assert runtime.pending_explosion_card is None
+    assert runtime.player_private_states["player-1"].hand == [second_defuse, skip_card]
+    assert runtime.game_state.players[0].hand_count == 2
+    assert runtime.game_state.discard_pile == [defuse_card]
+    assert runtime.game_state.draw_pile == [bomb, next_card]
+    assert runtime.game_state.action_lock is False
+    assert runtime.game_state.current_player_id == "player-1"
+    assert runtime.game_state.turn_number == 1
+    assert runtime.game_state.pending_draws == 2
+    assert runtime.game_state.phase is GamePhase.TURN_ACTION
+
+
+def test_resolving_explosion_without_defuse_eliminates_player_and_advances_turn() -> None:
+    bomb = card("bomb", CardType.EXPLODING_KITTEN)
+    skip_card = card("skip-card", CardType.SKIP)
+    favor_card = card("favor-card", CardType.FAVOR)
+    runtime = build_runtime(pending_draws=2)
+    prepare_pending_explosion(runtime, bomb)
+    set_player_hand(runtime, "player-1", [skip_card, favor_card])
+    runtime.player_private_states["player-1"].visible_future_cards = [CardType.ATTACK]
+    service = build_service(runtime)
+
+    result = service.resolve_pending_explosion("room-1", "player-1")
+
+    assert result.outcome is TurnLifecycleOutcome.PLAYER_ELIMINATED
+    assert runtime.pending_explosion_card is None
+    assert runtime.game_state.players[0].status is PlayerStatus.ELIMINATED
+    assert runtime.game_state.eliminated_player_ids == ["player-1"]
+    assert runtime.game_state.discard_pile == [bomb, skip_card, favor_card]
+    assert runtime.player_private_states["player-1"].hand == []
+    assert runtime.player_private_states["player-1"].visible_future_cards is None
+    assert runtime.game_state.players[0].hand_count == 0
+    assert runtime.game_state.action_lock is False
+    assert runtime.game_state.current_player_id == "player-2"
+    assert runtime.game_state.turn_number == 2
+    assert runtime.game_state.pending_draws == 1
+    assert runtime.game_state.phase is GamePhase.TURN_ACTION
+    assert runtime.game_state.room_status is RoomStatus.IN_GAME
+    assert runtime.game_state.winner_player_id is None
+
+
+def test_resolving_explosion_without_defuse_finishes_game_with_surviving_winner() -> None:
+    bomb = card("bomb", CardType.EXPLODING_KITTEN)
+    skip_card = card("skip-card", CardType.SKIP)
+    runtime = build_runtime(
+        statuses={"player-3": PlayerStatus.ELIMINATED},
+        eliminated_player_ids=["player-3"],
+    )
+    prepare_pending_explosion(runtime, bomb)
+    set_player_hand(runtime, "player-1", [skip_card])
+    service = build_service(runtime)
+
+    result = service.resolve_pending_explosion("room-1", "player-1")
+
+    assert result.outcome is TurnLifecycleOutcome.GAME_FINISHED
+    assert runtime.pending_explosion_card is None
+    assert runtime.game_state.players[0].status is PlayerStatus.ELIMINATED
+    assert runtime.game_state.eliminated_player_ids == ["player-3", "player-1"]
+    assert runtime.game_state.discard_pile == [bomb, skip_card]
+    assert runtime.player_private_states["player-1"].hand == []
+    assert runtime.game_state.players[0].hand_count == 0
+    assert runtime.game_state.action_lock is False
+    assert runtime.game_state.phase is GamePhase.FINISHED
+    assert runtime.game_state.room_status is RoomStatus.FINISHED
+    assert runtime.game_state.winner_player_id == "player-2"
+    assert runtime.game_state.current_player_id == "player-1"
+
+
+def test_disconnected_current_player_still_resolves_pending_explosion() -> None:
+    bomb = card("bomb", CardType.EXPLODING_KITTEN)
+    defuse_card = card("defuse-card", CardType.DEFUSE)
+    runtime = build_runtime(statuses={"player-1": PlayerStatus.DISCONNECTED})
+    prepare_pending_explosion(runtime, bomb)
+    set_player_hand(runtime, "player-1", [defuse_card])
+    service = build_service_with_random(runtime, index=0)
+
+    result = service.resolve_pending_explosion("room-1", "player-1")
+
+    assert result.outcome is TurnLifecycleOutcome.DEFUSED
+    assert runtime.pending_explosion_card is None
+    assert runtime.game_state.discard_pile == [defuse_card]
+    assert runtime.game_state.draw_pile[0] is bomb
+    assert runtime.game_state.current_player_id == "player-2"
+
+
+@pytest.mark.parametrize(
+    ("runtime", "player_id", "error_type"),
+    [
+        (
+            build_runtime(phase=GamePhase.RESOLVING_EXPLOSION, action_lock=True),
+            "player-1",
+            NoPendingExplosionError,
+        ),
+        (
+            build_runtime(phase=GamePhase.TURN_ACTION, action_lock=True),
+            "player-1",
+            InvalidExplosionStateError,
+        ),
+        (
+            build_runtime(phase=GamePhase.RESOLVING_EXPLOSION, action_lock=False),
+            "player-1",
+            InvalidExplosionStateError,
+        ),
+        (
+            build_runtime(phase=GamePhase.RESOLVING_EXPLOSION, action_lock=True),
+            "player-2",
+            NotCurrentPlayerError,
+        ),
+        (
+            build_runtime(
+                phase=GamePhase.RESOLVING_EXPLOSION,
+                action_lock=True,
+                statuses={"player-1": PlayerStatus.ELIMINATED},
+                eliminated_player_ids=["player-1"],
+            ),
+            "player-1",
+            PlayerEliminatedError,
+        ),
+        (
+            build_runtime(phase=GamePhase.RESOLVING_EXPLOSION, action_lock=True, pending_draws=0),
+            "player-1",
+            InvalidPendingDrawsError,
+        ),
+        (
+            build_runtime(
+                room_status=RoomStatus.FINISHED,
+                phase=GamePhase.RESOLVING_EXPLOSION,
+                action_lock=True,
+            ),
+            "player-1",
+            GameNotInProgressError,
+        ),
+    ],
+)
+def test_invalid_explosion_resolution_requests_are_rejected_without_state_mutation(
+    runtime: GameRuntimeState,
+    player_id: str,
+    error_type: type[Exception],
+) -> None:
+    if error_type is not NoPendingExplosionError:
+        runtime.pending_explosion_card = card("pending-bomb", CardType.EXPLODING_KITTEN)
+
+    assert_unchanged_after_explosion_error(runtime, error_type, player_id)
+
+
+def test_missing_game_pending_explosion_resolution_raises_game_not_found() -> None:
+    service = TurnLifecycleService(registry=GameRegistry())
+
+    with pytest.raises(GameNotFoundError):
+        service.resolve_pending_explosion("missing-room", "player-1")
