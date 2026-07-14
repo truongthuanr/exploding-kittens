@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+
+from app.modules.room.constants import MAX_ROOM_PLAYERS
+from app.schemas.enums import PlayerStatus, RoomStatus
+
+
+@dataclass(slots=True)
+class RoomPlayerState:
+    player_id: str
+    nickname: str
+    is_ready: bool = False
+    status: PlayerStatus = PlayerStatus.CONNECTED
+
+
+@dataclass(slots=True)
+class RoomState:
+    room_id: str
+    room_code: str
+    host_player_id: str
+    players: list[RoomPlayerState]
+    status: RoomStatus = RoomStatus.WAITING
+    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    def get_player(self, player_id: str) -> RoomPlayerState | None:
+        return next((player for player in self.players if player.player_id == player_id), None)
+
+    def has_nickname(self, nickname: str) -> bool:
+        return any(player.nickname == nickname for player in self.players)
+
+    def is_joinable(self) -> bool:
+        return self.status == RoomStatus.WAITING and len(self.players) < MAX_ROOM_PLAYERS
+
+    def is_host_player(self, player_id: str) -> bool:
+        return self.host_player_id == player_id
