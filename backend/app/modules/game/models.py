@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 
 from app.schemas.enums import CardType, GamePhase, PlayerStatus, RoomStatus
 
@@ -52,6 +53,35 @@ class ServerGameState:
 class GameSetupResult:
     game_state: ServerGameState
     player_private_states: dict[str, PlayerPrivateState]
+
+
+@dataclass(slots=True)
+class GameRuntimeState:
+    game_state: ServerGameState
+    player_private_states: dict[str, PlayerPrivateState]
+    pending_explosion_card: CardInstance | None = None
+
+    @classmethod
+    def from_setup_result(cls, setup_result: GameSetupResult) -> "GameRuntimeState":
+        return cls(
+            game_state=setup_result.game_state,
+            player_private_states=setup_result.player_private_states,
+            pending_explosion_card=None,
+        )
+
+
+class TurnLifecycleOutcome(StrEnum):
+    NORMAL_DRAW = "normal_draw"
+    EXPLOSION_PENDING = "explosion_pending"
+    GAME_FINISHED = "game_finished"
+
+
+@dataclass(slots=True)
+class TurnLifecycleResult:
+    outcome: TurnLifecycleOutcome
+    runtime: GameRuntimeState
+    player_id: str
+    request_id: str | None = None
 
 
 def utc_now_iso() -> str:
