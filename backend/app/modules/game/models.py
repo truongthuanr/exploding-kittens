@@ -74,6 +74,8 @@ class TurnLifecycleOutcome(StrEnum):
     NORMAL_DRAW = "normal_draw"
     EXPLOSION_PENDING = "explosion_pending"
     GAME_FINISHED = "game_finished"
+    SKIP_PLAYED = "skip_played"
+    ATTACK_PLAYED = "attack_played"
 
 
 @dataclass(slots=True)
