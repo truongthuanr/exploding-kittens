@@ -43,6 +43,7 @@ def test_validate_socket_payload_emits_error_for_invalid_request(monkeypatch) ->
             {
                 "code": "invalid_payload",
                 "message": "Invalid payload for room:create (1 validation error(s))",
+                "requestId": None,
             },
             "sid-2",
         )
