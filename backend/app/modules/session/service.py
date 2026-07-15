@@ -56,5 +56,8 @@ class SessionService:
     def get_session_by_socket(self, socket_id: str) -> PlayerSession | None:
         return self.registry.get_by_socket(socket_id)
 
+    def get_session_by_player(self, room_id: str, player_id: str) -> PlayerSession | None:
+        return self.registry.get_by_player(room_id, player_id)
+
     def _generate_session_id(self) -> str:
         return str(uuid4())
