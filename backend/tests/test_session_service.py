@@ -31,6 +31,15 @@ def test_get_session_by_socket_returns_none_when_socket_is_not_bound() -> None:
     assert service.get_session_by_socket("missing-socket") is None
 
 
+def test_get_session_by_player_returns_matching_room_player_session() -> None:
+    service = StubSessionService()
+    session = service.create_session("player-1", "room-1")
+    service.create_session("player-1", "room-2")
+
+    assert service.get_session_by_player("room-1", "player-1") is session
+    assert service.get_session_by_player("room-1", "missing-player") is None
+
+
 def test_bind_socket_binds_session_and_marks_it_connected() -> None:
     service = StubSessionService()
     session = service.create_session("player-1", "room-1")

@@ -26,6 +26,12 @@ class SessionRegistry:
             return None
         return self.get_by_id(player_session_id)
 
+    def get_by_player(self, room_id: str, player_id: str) -> PlayerSession | None:
+        for session in self.sessions_by_id.values():
+            if session.room_id == room_id and session.player_id == player_id:
+                return session
+        return None
+
     def remove(self, player_session_id: str) -> PlayerSession:
         session = self.get_by_id(player_session_id)
         if session.socket_id is not None:
