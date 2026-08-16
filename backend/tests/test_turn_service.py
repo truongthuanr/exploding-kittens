@@ -44,6 +44,11 @@ class FixedRandom:
         return self.value
 
 
+class ReverseRandom:
+    def shuffle(self, cards: list[CardInstance]) -> None:
+        cards.reverse()
+
+
 def card(card_id: str, card_type: CardType = CardType.SKIP) -> CardInstance:
     return CardInstance(card_id=card_id, card_type=card_type)
 
@@ -113,6 +118,12 @@ def build_service_with_random(runtime: GameRuntimeState, index: int) -> TurnLife
     registry = GameRegistry()
     registry.add(runtime)
     return TurnLifecycleService(registry=registry, randomizer=FixedRandom(index))
+
+
+def build_service_with_reverse_shuffle(runtime: GameRuntimeState) -> TurnLifecycleService:
+    registry = GameRegistry()
+    registry.add(runtime)
+    return TurnLifecycleService(registry=registry, randomizer=ReverseRandom())
 
 
 def prepare_pending_explosion(
@@ -212,6 +223,21 @@ def test_valid_normal_draw_adds_top_card_to_only_current_player_hand() -> None:
     assert runtime.game_state.current_player_id == "player-1"
     assert runtime.game_state.turn_number == 1
     assert runtime.game_state.pending_draws == 1
+
+
+def test_normal_draw_clears_stale_future_visibility_for_all_players() -> None:
+    runtime = build_runtime(pending_draws=2, draw_pile=[card("top-card"), card("second-card")])
+    runtime.player_private_states["player-1"].visible_future_cards = [CardType.SKIP]
+    runtime.player_private_states["player-2"].visible_future_cards = [CardType.ATTACK]
+    service = build_service(runtime)
+
+    result = service.draw_card("room-1", "player-1")
+
+    assert result.outcome is TurnLifecycleOutcome.NORMAL_DRAW
+    assert all(
+        private_state.visible_future_cards is None
+        for private_state in runtime.player_private_states.values()
+    )
 
 
 def test_normal_draw_with_one_pending_draw_completes_turn() -> None:
@@ -322,6 +348,114 @@ def test_attack_chaining_preserves_stacking_policy() -> None:
     assert runtime.game_state.current_player_id == "player-3"
     assert runtime.game_state.turn_number == 3
     assert runtime.game_state.pending_draws == 3
+
+
+def test_play_shuffle_discards_card_and_randomizes_draw_pile() -> None:
+    draw_1 = card("draw-1", CardType.ATTACK)
+    draw_2 = card("draw-2", CardType.DEFUSE)
+    draw_3 = card("draw-3", CardType.EXPLODING_KITTEN)
+    shuffle_card = card("shuffle-card", CardType.SHUFFLE)
+    runtime = build_runtime(pending_draws=3, draw_pile=[draw_1, draw_2, draw_3])
+    set_player_hand(runtime, "player-1", [shuffle_card])
+    runtime.player_private_states["player-1"].visible_future_cards = [CardType.ATTACK]
+    runtime.player_private_states["player-2"].visible_future_cards = [CardType.DEFUSE]
+    service = build_service_with_reverse_shuffle(runtime)
+
+    result = service.play_shuffle("room-1", "player-1", shuffle_card.card_id, request_id="request-1")
+
+    assert result.outcome is TurnLifecycleOutcome.SHUFFLE_PLAYED
+    assert result.runtime is runtime
+    assert result.player_id == "player-1"
+    assert result.request_id == "request-1"
+    assert runtime.player_private_states["player-1"].hand == []
+    assert runtime.game_state.discard_pile == [shuffle_card]
+    assert runtime.game_state.players[0].hand_count == 0
+    assert runtime.game_state.draw_pile == [draw_3, draw_2, draw_1]
+    assert runtime.game_state.current_player_id == "player-1"
+    assert runtime.game_state.turn_number == 1
+    assert runtime.game_state.pending_draws == 3
+    assert runtime.game_state.phase is GamePhase.TURN_ACTION
+    assert all(
+        private_state.visible_future_cards is None
+        for private_state in runtime.player_private_states.values()
+    )
+
+
+@pytest.mark.parametrize("draw_pile", [[], [card("only-card", CardType.DEFUSE)]])
+def test_play_shuffle_allows_small_draw_piles(draw_pile: list[CardInstance]) -> None:
+    shuffle_card = card("shuffle-card", CardType.SHUFFLE)
+    expected_draw_pile = list(reversed(draw_pile))
+    runtime = build_runtime(draw_pile=draw_pile.copy())
+    set_player_hand(runtime, "player-1", [shuffle_card])
+    service = build_service_with_reverse_shuffle(runtime)
+
+    result = service.play_shuffle("room-1", "player-1", shuffle_card.card_id)
+
+    assert result.outcome is TurnLifecycleOutcome.SHUFFLE_PLAYED
+    assert runtime.game_state.draw_pile == expected_draw_pile
+    assert runtime.game_state.discard_pile == [shuffle_card]
+
+
+def test_play_see_the_future_stores_top_three_card_types_without_changing_deck() -> None:
+    future_card = card("future-card", CardType.SEE_THE_FUTURE)
+    draw_pile = [
+        card("draw-1", CardType.ATTACK),
+        card("draw-2", CardType.DEFUSE),
+        card("draw-3", CardType.EXPLODING_KITTEN),
+        card("draw-4", CardType.SKIP),
+    ]
+    runtime = build_runtime(draw_pile=draw_pile.copy())
+    set_player_hand(runtime, "player-1", [future_card])
+    runtime.player_private_states["player-1"].visible_future_cards = [CardType.FAVOR]
+    service = build_service(runtime)
+
+    result = service.play_see_the_future(
+        "room-1",
+        "player-1",
+        future_card.card_id,
+        request_id="request-1",
+    )
+
+    assert result.outcome is TurnLifecycleOutcome.SEE_THE_FUTURE_PLAYED
+    assert result.runtime is runtime
+    assert result.player_id == "player-1"
+    assert result.request_id == "request-1"
+    assert runtime.player_private_states["player-1"].hand == []
+    assert runtime.game_state.discard_pile == [future_card]
+    assert runtime.game_state.players[0].hand_count == 0
+    assert runtime.player_private_states["player-1"].visible_future_cards == [
+        CardType.ATTACK,
+        CardType.DEFUSE,
+        CardType.EXPLODING_KITTEN,
+    ]
+    assert runtime.game_state.draw_pile == draw_pile
+    assert runtime.game_state.current_player_id == "player-1"
+    assert runtime.game_state.turn_number == 1
+    assert runtime.game_state.pending_draws == 1
+    assert runtime.game_state.phase is GamePhase.TURN_ACTION
+
+
+@pytest.mark.parametrize(
+    ("draw_pile", "expected"),
+    [
+        ([card("draw-1", CardType.SKIP)], [CardType.SKIP]),
+        ([], []),
+    ],
+)
+def test_play_see_the_future_handles_fewer_than_three_cards(
+    draw_pile: list[CardInstance],
+    expected: list[CardType],
+) -> None:
+    future_card = card("future-card", CardType.SEE_THE_FUTURE)
+    runtime = build_runtime(draw_pile=draw_pile.copy())
+    set_player_hand(runtime, "player-1", [future_card])
+    service = build_service(runtime)
+
+    result = service.play_see_the_future("room-1", "player-1", future_card.card_id)
+
+    assert result.outcome is TurnLifecycleOutcome.SEE_THE_FUTURE_PLAYED
+    assert runtime.player_private_states["player-1"].visible_future_cards == expected
+    assert runtime.game_state.draw_pile == draw_pile
 
 
 def test_play_skip_returns_game_finished_when_no_other_player_is_alive() -> None:
@@ -467,6 +601,12 @@ def test_missing_game_raises_game_not_found() -> None:
     with pytest.raises(GameNotFoundError):
         service.play_attack("missing-room", "player-1", "card-1")
 
+    with pytest.raises(GameNotFoundError):
+        service.play_shuffle("missing-room", "player-1", "card-1")
+
+    with pytest.raises(GameNotFoundError):
+        service.play_see_the_future("missing-room", "player-1", "card-1")
+
 
 def test_missing_player_is_rejected_without_state_mutation() -> None:
     runtime = build_runtime()
@@ -582,6 +722,25 @@ def test_resolving_explosion_with_defuse_consumes_one_defuse_and_advances_turn()
     assert runtime.game_state.turn_number == 2
     assert runtime.game_state.pending_draws == 1
     assert runtime.game_state.phase is GamePhase.TURN_ACTION
+
+
+def test_resolving_explosion_with_defuse_clears_stale_future_visibility_for_all_players() -> None:
+    bomb = card("bomb", CardType.EXPLODING_KITTEN)
+    defuse_card = card("defuse-card", CardType.DEFUSE)
+    runtime = build_runtime(pending_draws=2)
+    prepare_pending_explosion(runtime, bomb)
+    set_player_hand(runtime, "player-1", [defuse_card])
+    runtime.player_private_states["player-1"].visible_future_cards = [CardType.SKIP]
+    runtime.player_private_states["player-2"].visible_future_cards = [CardType.ATTACK]
+    service = build_service_with_random(runtime, index=0)
+
+    result = service.resolve_pending_explosion("room-1", "player-1")
+
+    assert result.outcome is TurnLifecycleOutcome.DEFUSED
+    assert all(
+        private_state.visible_future_cards is None
+        for private_state in runtime.player_private_states.values()
+    )
 
 
 def test_resolving_explosion_with_defuse_and_multiple_pending_draws_keeps_current_player() -> None:

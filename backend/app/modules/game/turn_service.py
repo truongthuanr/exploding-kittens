@@ -53,6 +53,7 @@ class TurnLifecycleService:
         state = runtime.game_state
         state.phase = GamePhase.TURN_DRAW
         card = state.draw_pile.pop(0)
+        _clear_visible_future_cards(runtime)
 
         if card.card_type is CardType.EXPLODING_KITTEN:
             runtime.pending_explosion_card = card
@@ -149,6 +150,62 @@ class TurnLifecycleService:
             request_id=request_id,
         )
 
+    def play_shuffle(
+        self,
+        room_id: str,
+        player_id: str,
+        card_id: str,
+        request_id: str | None = None,
+    ) -> TurnLifecycleResult:
+        runtime = self.registry.get(room_id)
+        if runtime is None:
+            raise GameNotFoundError(room_id)
+
+        card = validate_action_card_request(runtime, player_id, card_id, CardType.SHUFFLE)
+        _discard_card_from_hand(runtime, player_id, card)
+
+        state = runtime.game_state
+        self.randomizer.shuffle(state.draw_pile)
+        _clear_visible_future_cards(runtime)
+        state.phase = GamePhase.TURN_ACTION
+        state.updated_at = utc_now_iso()
+
+        return TurnLifecycleResult(
+            outcome=TurnLifecycleOutcome.SHUFFLE_PLAYED,
+            runtime=runtime,
+            player_id=player_id,
+            request_id=request_id,
+        )
+
+    def play_see_the_future(
+        self,
+        room_id: str,
+        player_id: str,
+        card_id: str,
+        request_id: str | None = None,
+    ) -> TurnLifecycleResult:
+        runtime = self.registry.get(room_id)
+        if runtime is None:
+            raise GameNotFoundError(room_id)
+
+        card = validate_action_card_request(runtime, player_id, card_id, CardType.SEE_THE_FUTURE)
+        _discard_card_from_hand(runtime, player_id, card)
+
+        state = runtime.game_state
+        player_private_state = _get_player_private_state(runtime, player_id)
+        player_private_state.visible_future_cards = [
+            card.card_type for card in state.draw_pile[:3]
+        ]
+        state.phase = GamePhase.TURN_ACTION
+        state.updated_at = utc_now_iso()
+
+        return TurnLifecycleResult(
+            outcome=TurnLifecycleOutcome.SEE_THE_FUTURE_PLAYED,
+            runtime=runtime,
+            player_id=player_id,
+            request_id=request_id,
+        )
+
     def resolve_pending_explosion(
         self,
         room_id: str,
@@ -188,6 +245,7 @@ class TurnLifecycleService:
         _discard_card_from_hand(runtime, player_id, defuse_card)
         insert_index = self.randomizer.randint(0, len(state.draw_pile))
         state.draw_pile.insert(insert_index, bomb)
+        _clear_visible_future_cards(runtime)
         runtime.pending_explosion_card = None
         state.pending_draws -= 1
         state.action_lock = False
@@ -308,6 +366,11 @@ def _find_card_in_hand(
         if card.card_type is card_type:
             return card
     return None
+
+
+def _clear_visible_future_cards(runtime: GameRuntimeState) -> None:
+    for private_state in runtime.player_private_states.values():
+        private_state.visible_future_cards = None
 
 
 def next_alive_player(runtime: GameRuntimeState) -> GamePlayerSummary | None:

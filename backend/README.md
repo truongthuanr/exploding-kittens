@@ -38,6 +38,14 @@ To stop:
 docker compose down
 ```
 
+## Docker Compose test
+
+From repo root:
+
+```bash
+docker compose run --rm backend pytest
+```
+
 `APP_CORS_ORIGINS` uses JSON array format in `.env`, for example:
 
 ```env

@@ -35,6 +35,11 @@ class StubSessionService(SessionService):
         return next(self._session_ids)
 
 
+class ReverseRandom:
+    def shuffle(self, cards: list[CardInstance]) -> None:
+        cards.reverse()
+
+
 def test_room_create_returns_player_session_id(monkeypatch) -> None:
     monkeypatch.setattr(server, "room_service", StubRoomService())
     monkeypatch.setattr(server, "session_service", StubSessionService())
@@ -474,10 +479,16 @@ def test_turn_play_skip_emits_public_and_private_state(monkeypatch) -> None:
     )
 
 
-def test_turn_play_unsupported_card_emits_error_without_mutation(monkeypatch) -> None:
+def test_turn_play_shuffle_resolves_and_does_not_leak_draw_pile(monkeypatch) -> None:
     _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
     shuffle_card = card("shuffle-1", CardType.SHUFFLE)
+    draw_1 = card("draw-1", CardType.ATTACK)
+    draw_2 = card("draw-2", CardType.DEFUSE)
+    runtime.game_state.draw_pile = [draw_1, draw_2]
     set_player_hand(runtime, "player-1", [shuffle_card])
+    runtime.player_private_states["player-1"].visible_future_cards = [CardType.ATTACK]
+    runtime.player_private_states["player-2"].visible_future_cards = [CardType.DEFUSE]
+    monkeypatch.setattr(server.turn_service, "randomizer", ReverseRandom())
 
     emitted: list[tuple[str, dict, str]] = []
 
@@ -489,7 +500,87 @@ def test_turn_play_unsupported_card_emits_error_without_mutation(monkeypatch) ->
     async def run() -> None:
         await server.handle_turn_play_card(
             "sid-host",
-            {"requestId": "unsupported-1", "cardId": shuffle_card.card_id},
+            {"requestId": "play-shuffle-1", "cardId": shuffle_card.card_id},
+        )
+
+    asyncio.run(run())
+
+    assert runtime.game_state.current_player_id == "player-1"
+    assert runtime.game_state.turn_number == 1
+    assert runtime.game_state.pending_draws == 1
+    assert runtime.game_state.discard_pile[-1].card_type is CardType.SHUFFLE
+    assert runtime.game_state.draw_pile == [draw_2, draw_1]
+    assert emitted[0][0] == "game:state"
+    assert emitted[0][1]["recentAction"]["actionType"] == "play_shuffle"
+    assert "draw_pile" not in emitted[0][1]
+    assert "drawPile" not in emitted[0][1]
+    private_events = [event for event in emitted if event[0] == "player:private-state"]
+    assert [event[2] for event in private_events] == ["sid-host", "sid-guest", "sid-third"]
+    assert all(event[1]["visibleFutureCards"] is None for event in private_events)
+
+
+def test_turn_play_see_the_future_emits_future_cards_only_to_actor(monkeypatch) -> None:
+    _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
+    future_card = card("future-1", CardType.SEE_THE_FUTURE)
+    draw_pile = [
+        card("draw-1", CardType.ATTACK),
+        card("draw-2", CardType.DEFUSE),
+        card("draw-3", CardType.EXPLODING_KITTEN),
+        card("draw-4", CardType.SKIP),
+    ]
+    runtime.game_state.draw_pile = draw_pile.copy()
+    set_player_hand(runtime, "player-1", [future_card])
+
+    emitted: list[tuple[str, dict, str]] = []
+
+    async def fake_emit(event: str, data: dict, **kwargs) -> None:
+        emitted.append((event, data, kwargs.get("room") or kwargs["to"]))
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+
+    async def run() -> None:
+        await server.handle_turn_play_card(
+            "sid-host",
+            {"requestId": "play-future-1", "cardId": future_card.card_id},
+        )
+
+    asyncio.run(run())
+
+    assert runtime.game_state.draw_pile == draw_pile
+    assert runtime.game_state.discard_pile[-1].card_type is CardType.SEE_THE_FUTURE
+    assert emitted[0][0] == "game:state"
+    assert emitted[0][1]["recentAction"]["actionType"] == "play_see_the_future"
+    assert "draw_pile" not in emitted[0][1]
+    assert "drawPile" not in emitted[0][1]
+    assert "visibleFutureCards" not in emitted[0][1]
+    private_events = [event for event in emitted if event[0] == "player:private-state"]
+    host_private = next(event[1] for event in private_events if event[2] == "sid-host")
+    guest_private = next(event[1] for event in private_events if event[2] == "sid-guest")
+    third_private = next(event[1] for event in private_events if event[2] == "sid-third")
+    assert host_private["playerId"] == "player-1"
+    assert host_private["visibleFutureCards"] == ["attack", "defuse", "exploding_kitten"]
+    assert guest_private["playerId"] == "player-2"
+    assert guest_private["visibleFutureCards"] is None
+    assert third_private["playerId"] == "player-3"
+    assert third_private["visibleFutureCards"] is None
+
+
+def test_turn_play_unsupported_card_emits_error_without_mutation(monkeypatch) -> None:
+    _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
+    favor_card = card("favor-1", CardType.FAVOR)
+    set_player_hand(runtime, "player-1", [favor_card])
+
+    emitted: list[tuple[str, dict, str]] = []
+
+    async def fake_emit(event: str, data: dict, **kwargs) -> None:
+        emitted.append((event, data, kwargs.get("room") or kwargs["to"]))
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+
+    async def run() -> None:
+        await server.handle_turn_play_card(
+            "sid-host",
+            {"requestId": "unsupported-1", "cardId": favor_card.card_id},
         )
 
     asyncio.run(run())
@@ -501,7 +592,7 @@ def test_turn_play_unsupported_card_emits_error_without_mutation(monkeypatch) ->
             "error",
             {
                 "code": "unsupported_card_action",
-                "message": "Card action is not supported yet: shuffle",
+                "message": "Card action is not supported yet: favor",
                 "requestId": "unsupported-1",
             },
             "sid-host",
