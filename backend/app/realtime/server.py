@@ -242,6 +242,10 @@ def recent_action_for_result(
         return ActionType.PLAY_SKIP
     if result.outcome is TurnLifecycleOutcome.ATTACK_PLAYED:
         return ActionType.PLAY_ATTACK
+    if result.outcome is TurnLifecycleOutcome.SHUFFLE_PLAYED:
+        return ActionType.PLAY_SHUFFLE
+    if result.outcome is TurnLifecycleOutcome.SEE_THE_FUTURE_PLAYED:
+        return ActionType.PLAY_SEE_THE_FUTURE
     if result.outcome is TurnLifecycleOutcome.DEFUSED:
         return ActionType.DEFUSE
     if result.outcome is TurnLifecycleOutcome.PLAYER_ELIMINATED:
@@ -259,6 +263,10 @@ def summary_for_action(runtime: GameRuntimeState, player_id: str, action_type: A
         return f"{nickname} played Skip"
     if action_type is ActionType.PLAY_ATTACK:
         return f"{nickname} played Attack"
+    if action_type is ActionType.PLAY_SHUFFLE:
+        return f"{nickname} played Shuffle"
+    if action_type is ActionType.PLAY_SEE_THE_FUTURE:
+        return f"{nickname} played See the Future"
     if action_type is ActionType.DEFUSE:
         return f"{nickname} defused an Exploding Kitten"
     if action_type is ActionType.ELIMINATE:
@@ -529,6 +537,20 @@ async def handle_turn_play_card(sid: str, data: dict | None) -> None:
                 )
             elif card.card_type is CardType.ATTACK:
                 result = service.play_attack(
+                    session.room_id,
+                    session.player_id,
+                    payload.cardId,
+                    request_id,
+                )
+            elif card.card_type is CardType.SHUFFLE:
+                result = service.play_shuffle(
+                    session.room_id,
+                    session.player_id,
+                    payload.cardId,
+                    request_id,
+                )
+            elif card.card_type is CardType.SEE_THE_FUTURE:
+                result = service.play_see_the_future(
                     session.room_id,
                     session.player_id,
                     payload.cardId,

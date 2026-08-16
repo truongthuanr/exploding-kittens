@@ -76,6 +76,8 @@ class TurnLifecycleOutcome(StrEnum):
     GAME_FINISHED = "game_finished"
     SKIP_PLAYED = "skip_played"
     ATTACK_PLAYED = "attack_played"
+    SHUFFLE_PLAYED = "shuffle_played"
+    SEE_THE_FUTURE_PLAYED = "see_the_future_played"
     DEFUSED = "defused"
     PLAYER_ELIMINATED = "player_eliminated"
 
