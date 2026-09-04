@@ -38,6 +38,23 @@ class PlayerDisconnectedError(GameError):
         self.player_id = player_id
 
 
+class FavorTargetRequiredError(GameError):
+    def __init__(self) -> None:
+        super().__init__("Favor requires a target player")
+
+
+class FavorSelfTargetError(GameError):
+    def __init__(self, player_id: str) -> None:
+        super().__init__(f"Favor target cannot be acting player: {player_id}")
+        self.player_id = player_id
+
+
+class FavorTargetEmptyHandError(GameError):
+    def __init__(self, player_id: str) -> None:
+        super().__init__(f"Favor target has no cards in hand: {player_id}")
+        self.player_id = player_id
+
+
 class CardNotInHandError(GameError):
     def __init__(self, player_id: str, card_id: str) -> None:
         super().__init__(f"Card not found in player hand: {card_id} for player: {player_id}")

@@ -40,6 +40,15 @@ class ReverseRandom:
         cards.reverse()
 
 
+class FixedRandom:
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    def randint(self, start: int, stop: int) -> int:
+        assert start <= self.value <= stop
+        return self.value
+
+
 def test_room_create_returns_player_session_id(monkeypatch) -> None:
     monkeypatch.setattr(server, "room_service", StubRoomService())
     monkeypatch.setattr(server, "session_service", StubSessionService())
@@ -565,7 +574,67 @@ def test_turn_play_see_the_future_emits_future_cards_only_to_actor(monkeypatch) 
     assert third_private["visibleFutureCards"] is None
 
 
-def test_turn_play_unsupported_card_emits_error_without_mutation(monkeypatch) -> None:
+def test_turn_play_favor_emits_public_and_private_state_without_leaking_card(monkeypatch) -> None:
+    _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
+    favor_card = card("favor-1", CardType.FAVOR)
+    transferred_card = card("target-hidden-card", CardType.ATTACK)
+    remaining_card = card("target-remaining-card", CardType.SKIP)
+    set_player_hand(runtime, "player-1", [favor_card])
+    set_player_hand(runtime, "player-2", [remaining_card, transferred_card])
+    set_player_hand(runtime, "player-3", [card("third-card", CardType.DEFUSE)])
+    monkeypatch.setattr(server.turn_service, "randomizer", FixedRandom(1))
+
+    emitted: list[tuple[str, dict, str]] = []
+
+    async def fake_emit(event: str, data: dict, **kwargs) -> None:
+        emitted.append((event, data, kwargs.get("room") or kwargs["to"]))
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+
+    async def run() -> None:
+        await server.handle_turn_play_card(
+            "sid-host",
+            {
+                "requestId": "play-favor-1",
+                "cardId": favor_card.card_id,
+                "targetPlayerId": "player-2",
+            },
+        )
+
+    asyncio.run(run())
+
+    assert runtime.game_state.current_player_id == "player-1"
+    assert runtime.game_state.turn_number == 1
+    assert runtime.game_state.pending_draws == 1
+    assert runtime.game_state.discard_pile == [favor_card]
+    assert runtime.player_private_states["player-1"].hand == [transferred_card]
+    assert runtime.player_private_states["player-2"].hand == [remaining_card]
+    assert server.is_processed_request("room-1", "player-1", "play-favor-1") is True
+    assert emitted[0][0] == "game:state"
+    public_state = emitted[0][1]
+    assert public_state["recentAction"] == {
+        "actorPlayerId": "player-1",
+        "actionType": "play_favor",
+        "targetPlayerId": "player-2",
+        "summary": "alice played Favor on bob",
+    }
+    assert public_state["discardTopCardType"] == "favor"
+    assert public_state["discardCount"] == 1
+    assert public_state["players"][0]["handCount"] == 1
+    assert public_state["players"][1]["handCount"] == 1
+    assert "target-hidden-card" not in str(public_state)
+    assert "attack" not in str(public_state)
+    private_events = [event for event in emitted if event[0] == "player:private-state"]
+    host_private = next(event[1] for event in private_events if event[2] == "sid-host")
+    guest_private = next(event[1] for event in private_events if event[2] == "sid-guest")
+    third_private = next(event[1] for event in private_events if event[2] == "sid-third")
+    assert host_private["hand"] == [{"cardId": "target-hidden-card", "cardType": "attack"}]
+    assert guest_private["hand"] == [{"cardId": "target-remaining-card", "cardType": "skip"}]
+    assert "target-hidden-card" not in str(third_private)
+    assert "attack" not in str(third_private)
+
+
+def test_turn_play_favor_missing_target_emits_target_required(monkeypatch) -> None:
     _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
     favor_card = card("favor-1", CardType.FAVOR)
     set_player_hand(runtime, "player-1", [favor_card])
@@ -580,24 +649,83 @@ def test_turn_play_unsupported_card_emits_error_without_mutation(monkeypatch) ->
     async def run() -> None:
         await server.handle_turn_play_card(
             "sid-host",
-            {"requestId": "unsupported-1", "cardId": favor_card.card_id},
+            {"requestId": "favor-missing-target", "cardId": favor_card.card_id},
         )
 
     asyncio.run(run())
 
     assert runtime.game_state.discard_pile == []
-    assert server.is_processed_request("room-1", "player-1", "unsupported-1") is False
-    assert emitted == [
-        (
-            "error",
-            {
-                "code": "unsupported_card_action",
-                "message": "Card action is not supported yet: favor",
-                "requestId": "unsupported-1",
-            },
+    assert server.is_processed_request("room-1", "player-1", "favor-missing-target") is False
+    assert emitted[0][0] == "error"
+    assert emitted[0][1]["code"] == "target_required"
+    assert emitted[0][1]["requestId"] == "favor-missing-target"
+
+
+def test_turn_play_favor_empty_target_hand_emits_target_hand_empty(monkeypatch) -> None:
+    _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
+    favor_card = card("favor-1", CardType.FAVOR)
+    set_player_hand(runtime, "player-1", [favor_card])
+    set_player_hand(runtime, "player-2", [])
+
+    emitted: list[tuple[str, dict, str]] = []
+
+    async def fake_emit(event: str, data: dict, **kwargs) -> None:
+        emitted.append((event, data, kwargs.get("room") or kwargs["to"]))
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+
+    async def run() -> None:
+        await server.handle_turn_play_card(
             "sid-host",
+            {
+                "requestId": "favor-empty-target",
+                "cardId": favor_card.card_id,
+                "targetPlayerId": "player-2",
+            },
         )
-    ]
+
+    asyncio.run(run())
+
+    assert runtime.game_state.discard_pile == []
+    assert server.is_processed_request("room-1", "player-1", "favor-empty-target") is False
+    assert emitted[0][0] == "error"
+    assert emitted[0][1]["code"] == "target_hand_empty"
+    assert emitted[0][1]["requestId"] == "favor-empty-target"
+
+
+def test_duplicate_favor_request_reemits_snapshot_without_second_transfer(monkeypatch) -> None:
+    _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
+    favor_card = card("favor-1", CardType.FAVOR)
+    transferred_card = card("target-hidden-card", CardType.ATTACK)
+    remaining_card = card("target-remaining-card", CardType.SKIP)
+    set_player_hand(runtime, "player-1", [favor_card])
+    set_player_hand(runtime, "player-2", [transferred_card, remaining_card])
+    monkeypatch.setattr(server.turn_service, "randomizer", FixedRandom(0))
+
+    emitted: list[tuple[str, dict, str]] = []
+
+    async def fake_emit(event: str, data: dict, **kwargs) -> None:
+        emitted.append((event, data, kwargs.get("room") or kwargs["to"]))
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+
+    async def run() -> None:
+        payload = {
+            "requestId": "favor-duplicate",
+            "cardId": favor_card.card_id,
+            "targetPlayerId": "player-2",
+        }
+        await server.handle_turn_play_card("sid-host", payload)
+        emitted.clear()
+        await server.handle_turn_play_card("sid-host", payload)
+
+    asyncio.run(run())
+
+    assert runtime.player_private_states["player-1"].hand == [transferred_card]
+    assert runtime.player_private_states["player-2"].hand == [remaining_card]
+    assert runtime.game_state.discard_pile == [favor_card]
+    assert [event[0] for event in emitted] == ["game:state", "player:private-state"]
+    assert {event[2] for event in emitted} == {"sid-host"}
 
 
 def test_turn_play_missing_card_emits_card_not_in_hand(monkeypatch) -> None:

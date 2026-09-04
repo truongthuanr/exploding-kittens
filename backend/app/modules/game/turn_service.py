@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from app.modules.game.errors import (
     CardNotInHandError,
     EmptyDrawPileError,
+    FavorSelfTargetError,
+    FavorTargetEmptyHandError,
+    FavorTargetRequiredError,
     GameNotFoundError,
     GameNotInProgressError,
     InvalidExplosionStateError,
@@ -206,6 +209,43 @@ class TurnLifecycleService:
             request_id=request_id,
         )
 
+    def play_favor(
+        self,
+        room_id: str,
+        player_id: str,
+        card_id: str,
+        target_player_id: str | None,
+        request_id: str | None = None,
+    ) -> TurnLifecycleResult:
+        runtime = self.registry.get(room_id)
+        if runtime is None:
+            raise GameNotFoundError(room_id)
+
+        card = validate_action_card_request(runtime, player_id, card_id, CardType.FAVOR)
+        target_private_state = validate_favor_target(runtime, player_id, target_player_id)
+
+        _discard_card_from_hand(runtime, player_id, card)
+
+        target_summary = _get_player_summary(runtime, target_private_state.player_id)
+        actor_private_state = _get_player_private_state(runtime, player_id)
+        actor_summary = _get_player_summary(runtime, player_id)
+        transfer_index = self.randomizer.randint(0, len(target_private_state.hand) - 1)
+        transferred_card = target_private_state.hand.pop(transfer_index)
+        actor_private_state.hand.append(transferred_card)
+        target_summary.hand_count -= 1
+        actor_summary.hand_count += 1
+
+        state = runtime.game_state
+        state.phase = GamePhase.TURN_ACTION
+        state.updated_at = utc_now_iso()
+
+        return TurnLifecycleResult(
+            outcome=TurnLifecycleOutcome.FAVOR_PLAYED,
+            runtime=runtime,
+            player_id=player_id,
+            request_id=request_id,
+        )
+
     def resolve_pending_explosion(
         self,
         room_id: str,
@@ -314,6 +354,32 @@ def validate_explosion_resolution_request(
         raise InvalidPendingDrawsError(state.pending_draws)
 
     return player_summary
+
+
+def validate_favor_target(
+    runtime: GameRuntimeState,
+    player_id: str,
+    target_player_id: str | None,
+) -> PlayerPrivateState:
+    if target_player_id is None:
+        raise FavorTargetRequiredError()
+
+    if target_player_id == player_id:
+        raise FavorSelfTargetError(player_id)
+
+    target_summary = _get_player_summary(runtime, target_player_id)
+    target_private_state = _get_player_private_state(runtime, target_player_id)
+
+    if (
+        target_summary.status is PlayerStatus.ELIMINATED
+        or target_player_id in runtime.game_state.eliminated_player_ids
+    ):
+        raise PlayerEliminatedError(target_player_id)
+
+    if not target_private_state.hand:
+        raise FavorTargetEmptyHandError(target_player_id)
+
+    return target_private_state
 
 
 def _validate_active_turn(runtime: GameRuntimeState, player_id: str) -> None:
