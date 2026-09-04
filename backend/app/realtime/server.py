@@ -16,6 +16,9 @@ from app.modules.game import (
 from app.modules.game.errors import (
     CardNotInHandError,
     EmptyDrawPileError,
+    FavorSelfTargetError,
+    FavorTargetEmptyHandError,
+    FavorTargetRequiredError,
     GameNotFoundError,
     GameNotInProgressError,
     InvalidCardTypeError,
@@ -120,6 +123,9 @@ GAME_ERROR_CODES: dict[type[Exception], str] = {
     NotCurrentPlayerError: "not_current_player",
     PlayerEliminatedError: "player_eliminated",
     PlayerDisconnectedError: "player_disconnected",
+    FavorTargetRequiredError: "target_required",
+    FavorSelfTargetError: "invalid_target",
+    FavorTargetEmptyHandError: "target_hand_empty",
     CardNotInHandError: "card_not_in_hand",
     InvalidCardTypeError: "invalid_card_type",
     InvalidTurnPhaseError: "invalid_turn_phase",
@@ -246,6 +252,8 @@ def recent_action_for_result(
         return ActionType.PLAY_SHUFFLE
     if result.outcome is TurnLifecycleOutcome.SEE_THE_FUTURE_PLAYED:
         return ActionType.PLAY_SEE_THE_FUTURE
+    if result.outcome is TurnLifecycleOutcome.FAVOR_PLAYED:
+        return ActionType.PLAY_FAVOR
     if result.outcome is TurnLifecycleOutcome.DEFUSED:
         return ActionType.DEFUSE
     if result.outcome is TurnLifecycleOutcome.PLAYER_ELIMINATED:
@@ -255,7 +263,12 @@ def recent_action_for_result(
     return ActionType.DRAW_CARD
 
 
-def summary_for_action(runtime: GameRuntimeState, player_id: str, action_type: ActionType) -> str:
+def summary_for_action(
+    runtime: GameRuntimeState,
+    player_id: str,
+    action_type: ActionType,
+    target_player_id: str | None = None,
+) -> str:
     nickname = get_player_nickname(runtime, player_id)
     if action_type is ActionType.START_GAME:
         return f"{nickname} started the game"
@@ -267,6 +280,11 @@ def summary_for_action(runtime: GameRuntimeState, player_id: str, action_type: A
         return f"{nickname} played Shuffle"
     if action_type is ActionType.PLAY_SEE_THE_FUTURE:
         return f"{nickname} played See the Future"
+    if action_type is ActionType.PLAY_FAVOR:
+        if target_player_id is not None:
+            target_nickname = get_player_nickname(runtime, target_player_id)
+            return f"{nickname} played Favor on {target_nickname}"
+        return f"{nickname} played Favor"
     if action_type is ActionType.DEFUSE:
         return f"{nickname} defused an Exploding Kitten"
     if action_type is ActionType.ELIMINATE:
@@ -279,12 +297,14 @@ async def emit_action_result(
     before_turn: tuple[str, int],
     action_type: ActionType,
     eliminated_player_id: str | None = None,
+    target_player_id: str | None = None,
 ) -> None:
     runtime = result.runtime
     recent_action = build_recent_action(
         actor_player_id=result.player_id,
         action_type=action_type,
-        summary=summary_for_action(runtime, result.player_id, action_type),
+        summary=summary_for_action(runtime, result.player_id, action_type, target_player_id),
+        target_player_id=target_player_id,
     )
     await emit_game_state(sio, runtime, recent_action)
     await emit_private_states(sio, session_service, runtime)
@@ -556,6 +576,14 @@ async def handle_turn_play_card(sid: str, data: dict | None) -> None:
                     payload.cardId,
                     request_id,
                 )
+            elif card.card_type is CardType.FAVOR:
+                result = service.play_favor(
+                    session.room_id,
+                    session.player_id,
+                    payload.cardId,
+                    payload.targetPlayerId,
+                    request_id,
+                )
             else:
                 await emit_socket_error(
                     sid,
@@ -566,7 +594,12 @@ async def handle_turn_play_card(sid: str, data: dict | None) -> None:
                 return
 
             action_type = recent_action_for_result(result)
-            await emit_action_result(result, before_turn, action_type)
+            await emit_action_result(
+                result,
+                before_turn,
+                action_type,
+                target_player_id=payload.targetPlayerId if card.card_type is CardType.FAVOR else None,
+            )
             mark_processed_request(session.room_id, session.player_id, request_id)
         except SERVICE_ERROR_TYPES as error:
             await emit_service_error(sid, error, request_id)

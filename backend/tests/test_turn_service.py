@@ -7,6 +7,9 @@ import pytest
 from app.modules.game.errors import (
     CardNotInHandError,
     EmptyDrawPileError,
+    FavorSelfTargetError,
+    FavorTargetEmptyHandError,
+    FavorTargetRequiredError,
     GameNotFoundError,
     GameNotInProgressError,
     InvalidExplosionStateError,
@@ -456,6 +459,109 @@ def test_play_see_the_future_handles_fewer_than_three_cards(
     assert result.outcome is TurnLifecycleOutcome.SEE_THE_FUTURE_PLAYED
     assert runtime.player_private_states["player-1"].visible_future_cards == expected
     assert runtime.game_state.draw_pile == draw_pile
+
+
+def test_play_favor_transfers_random_target_card_without_advancing_turn() -> None:
+    favor_card = card("favor-card", CardType.FAVOR)
+    target_first_card = card("target-first-card", CardType.SKIP)
+    target_second_card = card("target-second-card", CardType.ATTACK)
+    runtime = build_runtime(pending_draws=2)
+    set_player_hand(runtime, "player-1", [favor_card])
+    set_player_hand(runtime, "player-2", [target_first_card, target_second_card])
+    runtime.player_private_states["player-1"].visible_future_cards = [CardType.DEFUSE]
+    service = build_service_with_random(runtime, index=1)
+
+    result = service.play_favor(
+        "room-1",
+        "player-1",
+        favor_card.card_id,
+        "player-2",
+        request_id="request-1",
+    )
+
+    assert result.outcome is TurnLifecycleOutcome.FAVOR_PLAYED
+    assert result.runtime is runtime
+    assert result.player_id == "player-1"
+    assert result.request_id == "request-1"
+    assert runtime.game_state.discard_pile == [favor_card]
+    assert runtime.player_private_states["player-1"].hand == [target_second_card]
+    assert runtime.player_private_states["player-2"].hand == [target_first_card]
+    assert runtime.game_state.players[0].hand_count == 1
+    assert runtime.game_state.players[1].hand_count == 1
+    assert runtime.game_state.current_player_id == "player-1"
+    assert runtime.game_state.turn_number == 1
+    assert runtime.game_state.pending_draws == 2
+    assert runtime.game_state.phase is GamePhase.TURN_ACTION
+    assert runtime.player_private_states["player-1"].visible_future_cards == [CardType.DEFUSE]
+
+
+@pytest.mark.parametrize(
+    ("target_player_id", "error_type"),
+    [
+        (None, FavorTargetRequiredError),
+        ("player-1", FavorSelfTargetError),
+        ("missing-player", PlayerNotFoundError),
+    ],
+)
+def test_play_favor_rejects_invalid_target(
+    target_player_id: str | None,
+    error_type: type[Exception],
+) -> None:
+    favor_card = card("favor-card", CardType.FAVOR)
+    runtime = build_runtime()
+    set_player_hand(runtime, "player-1", [favor_card])
+    before = deepcopy(runtime)
+    service = build_service(runtime)
+
+    with pytest.raises(error_type):
+        service.play_favor("room-1", "player-1", favor_card.card_id, target_player_id)
+
+    assert runtime == before
+
+
+def test_play_favor_rejects_eliminated_target() -> None:
+    favor_card = card("favor-card", CardType.FAVOR)
+    runtime = build_runtime(
+        statuses={"player-2": PlayerStatus.ELIMINATED},
+        eliminated_player_ids=["player-2"],
+    )
+    set_player_hand(runtime, "player-1", [favor_card])
+    before = deepcopy(runtime)
+    service = build_service(runtime)
+
+    with pytest.raises(PlayerEliminatedError):
+        service.play_favor("room-1", "player-1", favor_card.card_id, "player-2")
+
+    assert runtime == before
+
+
+def test_play_favor_allows_disconnected_target() -> None:
+    favor_card = card("favor-card", CardType.FAVOR)
+    target_card = card("target-card", CardType.SKIP)
+    runtime = build_runtime(statuses={"player-2": PlayerStatus.DISCONNECTED})
+    set_player_hand(runtime, "player-1", [favor_card])
+    set_player_hand(runtime, "player-2", [target_card])
+    service = build_service_with_random(runtime, index=0)
+
+    result = service.play_favor("room-1", "player-1", favor_card.card_id, "player-2")
+
+    assert result.outcome is TurnLifecycleOutcome.FAVOR_PLAYED
+    assert runtime.player_private_states["player-1"].hand == [target_card]
+    assert runtime.player_private_states["player-2"].hand == []
+
+
+def test_play_favor_rejects_empty_target_hand() -> None:
+    favor_card = card("favor-card", CardType.FAVOR)
+    runtime = build_runtime()
+    set_player_hand(runtime, "player-1", [favor_card])
+    set_player_hand(runtime, "player-2", [])
+    before = deepcopy(runtime)
+    service = build_service(runtime)
+
+    with pytest.raises(FavorTargetEmptyHandError):
+        service.play_favor("room-1", "player-1", favor_card.card_id, "player-2")
+
+    assert runtime == before
 
 
 def test_play_skip_returns_game_finished_when_no_other_player_is_alive() -> None:
