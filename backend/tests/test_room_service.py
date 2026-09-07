@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import pytest
 
 from app.modules.room.errors import (
@@ -8,6 +10,7 @@ from app.modules.room.errors import (
     PlayersDisconnectedError,
     PlayersNotReadyError,
     RoomFullError,
+    RoomNotFoundError,
     RoomNotJoinableError,
     RoomNotWaitingError,
 )
@@ -234,3 +237,33 @@ def test_mapper_converts_room_state_to_room_updated_event() -> None:
             "status": PlayerStatus.DISCONNECTED,
         },
     ]
+
+
+def test_join_unknown_room_does_not_mutate_registry() -> None:
+    service = StubRoomService()
+    service.create_room("alice")
+    before = deepcopy(service.registry)
+    with pytest.raises(RoomNotFoundError):
+        service.join_room("MISSING", "bob")
+    assert service.registry == before
+
+
+@pytest.mark.parametrize("status", [RoomStatus.STARTING, RoomStatus.IN_GAME, RoomStatus.FINISHED])
+@pytest.mark.parametrize("operation", ["join", "ready", "start"])
+def test_lobby_actions_in_invalid_states_do_not_mutate_room(status, operation) -> None:
+    service = StubRoomService()
+    room = service.create_room("alice").room
+    service.join_room(room.room_code, "bob")
+    service.join_room(room.room_code, "charlie")
+    for player in room.players:
+        service.set_ready(room.room_id, player.player_id, True)
+    room.status = status
+    before = deepcopy(service.registry)
+    with pytest.raises(RoomNotJoinableError if operation == "join" else RoomNotWaitingError):
+        if operation == "join":
+            service.join_room(room.room_code, "dora")
+        elif operation == "ready":
+            service.set_ready(room.room_id, room.host_player_id, False)
+        else:
+            service.transition_to_starting(room.room_id, room.host_player_id)
+    assert service.registry == before

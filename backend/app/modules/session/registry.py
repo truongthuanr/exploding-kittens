@@ -41,6 +41,12 @@ class SessionRegistry:
 
     def bind_socket(self, player_session_id: str, socket_id: str) -> PlayerSession:
         session = self.get_by_id(player_session_id)
+        owner = self.session_id_by_socket.get(socket_id)
+        if owner is not None and owner != player_session_id:
+            raise ValueError("Socket already has a session binding")
+        # Validate the destination before releasing the existing binding.
+        if session.socket_id is not None and session.socket_id != socket_id:
+            self.session_id_by_socket.pop(session.socket_id, None)
         session.bind_socket(socket_id)
         self.session_id_by_socket[socket_id] = player_session_id
         return session

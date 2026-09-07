@@ -1,3 +1,7 @@
+from collections import Counter
+
+import pytest
+
 from app.modules.game.service import GameSetupService
 from app.modules.room.models import RoomPlayerState, RoomState
 from app.schemas.enums import CardType, GamePhase, RoomStatus
@@ -51,10 +55,11 @@ def test_setup_uses_expected_exploding_kitten_count_for_supported_player_counts(
         assert count_cards(CardType.EXPLODING_KITTEN, result.game_state.draw_pile) == expected_bombs
 
 
-def test_setup_deals_five_cards_and_at_least_one_defuse_to_each_player() -> None:
+@pytest.mark.parametrize("player_count", [3, 4, 5])
+def test_setup_deals_five_cards_and_at_least_one_defuse_to_each_player(player_count) -> None:
     service = StubGameSetupService()
 
-    result = service.create_initial_game_state(build_room(3))
+    result = service.create_initial_game_state(build_room(player_count))
 
     for player_private_state in result.player_private_states.values():
         assert len(player_private_state.hand) == 5
@@ -81,10 +86,11 @@ def test_setup_allows_extra_defuse_in_initial_four_dealt_cards() -> None:
     assert host_hand[-1].card_type is CardType.DEFUSE
 
 
-def test_setup_initializes_turn_state_and_public_player_summaries() -> None:
+@pytest.mark.parametrize("player_count", [3, 4, 5])
+def test_setup_initializes_turn_state_and_public_player_summaries(player_count) -> None:
     service = StubGameSetupService()
 
-    result = service.create_initial_game_state(build_room(4))
+    result = service.create_initial_game_state(build_room(player_count))
     game_state = result.game_state
 
     assert game_state.room_status is RoomStatus.IN_GAME
@@ -110,3 +116,33 @@ def test_setup_draw_pile_size_matches_remaining_cards_after_dealing() -> None:
         result = service.create_initial_game_state(build_room(player_count))
 
         assert len(result.game_state.draw_pile) == expected_draw_pile_size(player_count)
+
+
+@pytest.mark.parametrize("player_count", [0, 2, 6])
+def test_setup_rejects_unsupported_player_counts(player_count) -> None:
+    with pytest.raises(ValueError, match="Unsupported player count"):
+        StubGameSetupService().create_initial_game_state(build_room(player_count))
+
+
+@pytest.mark.parametrize("player_count", [3, 4, 5])
+def test_setup_preserves_deck_composition_and_unique_ids(player_count) -> None:
+    result = StubGameSetupService().create_initial_game_state(build_room(player_count))
+    cards = result.game_state.draw_pile + [
+        card for private in result.player_private_states.values() for card in private.hand
+    ]
+    assert Counter(card.card_type for card in cards) == {
+        CardType.EXPLODING_KITTEN: player_count - 1,
+        CardType.DEFUSE: player_count + 2,
+        CardType.SKIP: 4, CardType.ATTACK: 4, CardType.SHUFFLE: 4,
+        CardType.SEE_THE_FUTURE: 5, CardType.FAVOR: 4,
+    }
+    assert len({card.card_id for card in cards}) == len(cards)
+
+
+def test_setup_starts_with_first_seat_even_when_host_is_elsewhere() -> None:
+    room = build_room(3)
+    room.players = [room.players[1], room.players[0], room.players[2]]
+    result = StubGameSetupService().create_initial_game_state(room)
+    assert result.game_state.current_player_id == room.players[0].player_id
+    assert result.game_state.players[0].seat_index == 0
+    assert result.game_state.players[1].is_host
