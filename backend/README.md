@@ -21,6 +21,25 @@ cp .env.example .env
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
+## Local tests
+
+Use Python 3.12+ from the repository root:
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+python -m pytest -q
+```
+
+If the virtual environment already exists, activate it and install the dev
+extras before running tests. The suite uses in-memory registries and mocked
+Socket.IO emissions; PostgreSQL and a running server are not required.
+
+See [the test coverage map](../plan/detail-implementation/15-backend-test-coverage.md)
+for covered rules, regression fixes, and deferred integration work.
+
 ## Docker Compose run
 
 From repo root:

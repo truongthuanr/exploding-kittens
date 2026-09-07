@@ -391,6 +391,8 @@ async def handle_room_create(sid: str, data: dict | None) -> dict | None:
         return None
 
     try:
+        if session_service.get_session_by_socket(sid) is not None:
+            raise ValueError("Socket already has a session binding")
         result = room_service.create_room(payload.nickname)
         session = session_service.create_session(
             player_id=result.player.player_id,
@@ -422,6 +424,8 @@ async def handle_room_join(sid: str, data: dict | None) -> dict | None:
         return None
 
     try:
+        if session_service.get_session_by_socket(sid) is not None:
+            raise ValueError("Socket already has a session binding")
         result = room_service.join_room(payload.roomCode, payload.nickname)
         session = session_service.create_session(
             player_id=result.player.player_id,
@@ -662,6 +666,9 @@ async def handle_player_reconnect(sid: str, data: dict | None) -> None:
             "invalid_session",
             f"Invalid player session: {payload.playerSessionId}",
         )
+        return
+    except ValueError as error:
+        await emit_service_error(sid, error)
         return
 
     await sio.enter_room(sid, session.room_id)

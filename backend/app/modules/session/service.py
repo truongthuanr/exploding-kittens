@@ -40,11 +40,6 @@ class SessionService:
         return session
 
     def rebind_socket(self, player_session_id: str, socket_id: str) -> PlayerSession:
-        session = self.registry.get_by_id(player_session_id)
-        old_socket_id = session.socket_id
-        if old_socket_id is not None:
-            self.registry.unbind_socket(old_socket_id)
-
         session = self.registry.bind_socket(player_session_id, socket_id)
         session.mark_connected()
         session.touch_last_seen()

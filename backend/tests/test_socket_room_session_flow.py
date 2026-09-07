@@ -1,3 +1,7 @@
+from copy import deepcopy
+
+import pytest
+
 import asyncio
 
 from app.modules.game import CardInstance, GameRegistry, GameRuntimeState, GameSetupService
@@ -1006,3 +1010,73 @@ def test_reconnect_into_finished_game_does_not_emit_turn_started(monkeypatch) ->
         "player:private-state",
     ]
     assert emitted[1][1]["winnerPlayerId"] == "player-1"
+
+
+@pytest.mark.parametrize("operation", ["create", "join", "reconnect"])
+def test_bound_socket_conflict_does_not_mutate_rooms_or_sessions(monkeypatch, operation):
+    rooms, sessions = setup_startable_room()
+    monkeypatch.setattr(server, "room_service", rooms)
+    monkeypatch.setattr(server, "session_service", sessions)
+    before = deepcopy((rooms.registry, sessions.registry))
+    emitted = []
+
+    async def fake_emit(event, data, **kwargs):
+        emitted.append((event, data, kwargs))
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+    if operation == "create":
+        asyncio.run(server.handle_room_create("sid-host", {"nickname": "new"}))
+    elif operation == "join":
+        asyncio.run(server.handle_room_join("sid-host", {"nickname": "new", "roomCode": "ABCD12"}))
+    else:
+        asyncio.run(server.handle_player_reconnect("sid-host", {"playerSessionId": "session-2"}))
+    assert (rooms.registry, sessions.registry) == before
+    assert len(emitted) == 1
+    assert emitted[0][0] == "error"
+    assert emitted[0][1]["code"] == "invalid_operation"
+    assert emitted[0][2] == {"to": "sid-host"}
+
+
+def test_reconnect_snapshot_excludes_other_players_secrets(monkeypatch):
+    _rooms, sessions, _games, runtime = setup_started_game(monkeypatch)
+    runtime.game_state.discard_pile = [
+        card("secret-discard-1", CardType.ATTACK), card("secret-discard-2", CardType.SKIP),
+    ]
+    runtime.player_private_states["player-2"].visible_future_cards = [CardType.FAVOR]
+    emitted = []
+
+    async def fake_emit(event, data, **kwargs):
+        emitted.append((event, data, kwargs))
+
+    async def fake_enter_room(*args):
+        pass
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+    monkeypatch.setattr(server.sio, "enter_room", fake_enter_room)
+    asyncio.run(server.handle_player_reconnect("sid-new", {"playerSessionId": "session-1"}))
+    public = next(data for event, data, _ in emitted if event == "game:state")
+    # An allowlist catches new accidental public fields, including nested hand data.
+    assert set(public) == {
+        "roomId", "phase", "currentPlayerId", "pendingDraws", "turnNumber", "players",
+        "discardTopCardType", "discardCount", "winnerPlayerId", "recentAction",
+    }
+    assert all(set(player) == {"playerId", "nickname", "handCount", "status"}
+               for player in public["players"])
+    assert public["discardTopCardType"] == "skip"
+    assert public["discardCount"] == 2
+    private_events = [(data, target) for event, data, target in emitted if event == "player:private-state"]
+    assert len(private_events) == 1
+    private, target = private_events[0]
+    assert target == {"to": "sid-new"}
+    assert private["hand"] == [
+        {"cardId": c.card_id, "cardType": c.card_type.value}
+        for c in runtime.player_private_states["player-1"].hand
+    ]
+    assert private["visibleFutureCards"] is None
+    serialized = str(emitted)
+    for session in sessions.registry.sessions_by_id.values():
+        assert session.player_session_id not in serialized
+    hidden_ids = [c.card_id for c in runtime.game_state.draw_pile + runtime.game_state.discard_pile]
+    hidden_ids += [c.card_id for pid, state in runtime.player_private_states.items()
+                   if pid != "player-1" for c in state.hand]
+    assert all(card_id not in serialized for card_id in hidden_ids)

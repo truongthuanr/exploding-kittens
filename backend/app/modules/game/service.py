@@ -92,7 +92,7 @@ class GameSetupService:
             room_status=RoomStatus.IN_GAME,
             phase=GamePhase.TURN_ACTION,
             turn_number=1,
-            current_player_id=room.host_player_id,
+            current_player_id=players[0].player_id,
             pending_draws=1,
             players=players,
             draw_pile=draw_pile,
