@@ -46,10 +46,11 @@ From repo root:
 
 ```bash
 cp backend/.env.example backend/.env
-docker compose up --build backend db
+docker compose up --build
 ```
 
-Backend will be available at `http://127.0.0.1:8000` and PostgreSQL at `127.0.0.1:5432`.
+Backend will be available at `http://127.0.0.1:8000`, PostgreSQL at
+`127.0.0.1:5432`, and the frontend at `http://127.0.0.1:3000`.
 
 To stop:
 

@@ -32,6 +32,7 @@ class RoomPlayer(SocketResponseModel):
 
 
 class RoomUpdatedEvent(SocketResponseModel):
+    stateVersion: int = 0
     roomId: str
     roomCode: str
     status: RoomStatus
@@ -65,6 +66,7 @@ class RecentAction(SocketResponseModel):
 
 
 class PublicGameStateEvent(SocketResponseModel):
+    stateVersion: int = 0
     roomId: str
     phase: GamePhase
     currentPlayerId: str
@@ -83,6 +85,7 @@ class PrivateCardView(SocketResponseModel):
 
 
 class PlayerPrivateStateEvent(SocketResponseModel):
+    stateVersion: int = 0
     playerId: str
     hand: list[PrivateCardView]
     visibleFutureCards: list[CardType] | None
@@ -101,3 +104,16 @@ class ErrorEvent(SocketResponseModel):
     code: str
     message: str
     requestId: str | None = None
+
+
+class BootstrapResponse(RoomCreateResponse):
+    requiresTakeover: bool = False
+    stateVersion: int
+    room: RoomUpdatedEvent
+    game: PublicGameStateEvent | None
+    private: PlayerPrivateStateEvent | None
+    attemptId: str | None = None
+
+
+class SessionReplacedEvent(SocketResponseModel):
+    message: str

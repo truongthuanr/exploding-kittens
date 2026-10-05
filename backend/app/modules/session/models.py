@@ -9,6 +9,7 @@ class PlayerSession:
     player_session_id: str
     player_id: str
     room_id: str
+    client_instance_id: str | None = None
     socket_id: str | None = None
     connected: bool = False
     last_seen_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())

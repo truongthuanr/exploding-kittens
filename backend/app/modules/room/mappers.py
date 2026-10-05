@@ -4,6 +4,7 @@ from app.schemas.responses import RoomPlayer, RoomUpdatedEvent
 
 def to_room_updated_event(room: RoomState) -> RoomUpdatedEvent:
     return RoomUpdatedEvent(
+        stateVersion=room.state_version,
         roomId=room.room_id,
         roomCode=room.room_code,
         status=room.status,
