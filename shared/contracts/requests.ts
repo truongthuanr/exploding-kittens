@@ -1,8 +1,12 @@
 export type RoomCreateRequest = {
+  requestId: string;
+  clientInstanceId: string;
   nickname: string;
 };
 
 export type RoomJoinRequest = {
+  requestId: string;
+  clientInstanceId: string;
   roomCode: string;
   nickname: string;
 };
@@ -27,4 +31,7 @@ export type DrawCardRequest = {
 
 export type ReconnectRequest = {
   playerSessionId: string;
+  clientInstanceId: string;
+  takeover: boolean;
+  attemptId: string;
 };

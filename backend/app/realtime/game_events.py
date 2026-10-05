@@ -42,6 +42,7 @@ def to_public_game_state(
         discard_top_card_type = state.discard_pile[-1].card_type
 
     return PublicGameStateEvent(
+        stateVersion=runtime.state_version,
         roomId=state.room_id,
         phase=state.phase,
         currentPlayerId=state.current_player_id,
@@ -124,7 +125,7 @@ async def emit_private_state(
 
     await sio.emit(
         "player:private-state",
-        to_player_private_state(private_state).model_dump(mode="json"),
+        {**to_player_private_state(private_state).model_dump(mode="json"), "stateVersion": runtime.state_version},
         to=session.socket_id,
     )
 
@@ -133,10 +134,11 @@ async def emit_private_state_to_sid(
     sio: socketio.AsyncServer,
     sid: str,
     private_state: PlayerPrivateState,
+    state_version: int = 0,
 ) -> None:
     await sio.emit(
         "player:private-state",
-        to_player_private_state(private_state).model_dump(mode="json"),
+        {**to_player_private_state(private_state).model_dump(mode="json"), "stateVersion": state_version},
         to=sid,
     )
 
@@ -219,4 +221,4 @@ async def emit_requester_snapshot(
     await emit_game_state_to_sid(sio, sid, runtime, recent_action)
     private_state = runtime.player_private_states.get(player_id)
     if private_state is not None:
-        await emit_private_state_to_sid(sio, sid, private_state)
+        await emit_private_state_to_sid(sio, sid, private_state, runtime.state_version)

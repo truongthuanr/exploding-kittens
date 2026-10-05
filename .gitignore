@@ -5,3 +5,10 @@ __pycache__/
 .venv/
 *.pyc
 .env
+node_modules/
+.next/
+*.tsbuildinfo
+*.egg-info/
+playwright-report/
+test-results/
+.env.local

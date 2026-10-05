@@ -9,6 +9,8 @@ export const CLIENT_EVENTS = {
 } as const;
 
 export const SERVER_EVENTS = {
+  SYSTEM_CONNECTED: "system:connected",
+  SESSION_REPLACED: "session:replaced",
   ROOM_UPDATED: "room:updated",
   GAME_STARTED: "game:started",
   TURN_STARTED: "turn:started",

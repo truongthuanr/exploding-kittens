@@ -23,6 +23,7 @@ export type RoomPlayer = {
 };
 
 export type RoomUpdatedEvent = {
+  stateVersion: number;
   roomId: string;
   roomCode: string;
   status: RoomStatus;
@@ -51,11 +52,12 @@ export type PublicGamePlayer = {
 export type RecentAction = {
   actorPlayerId: string;
   actionType: ActionType;
-  targetPlayerId?: string;
+  targetPlayerId?: string | null;
   summary: string;
 };
 
 export type PublicGameStateEvent = {
+  stateVersion: number;
   roomId: string;
   phase: GamePhase;
   currentPlayerId: string;
@@ -74,6 +76,7 @@ export type PrivateCardView = {
 };
 
 export type PlayerPrivateStateEvent = {
+  stateVersion: number;
   playerId: string;
   hand: PrivateCardView[];
   visibleFutureCards: CardType[] | null;
@@ -91,5 +94,23 @@ export type GameEndedEvent = {
 export type ErrorEvent = {
   code: string;
   message: string;
-  requestId?: string;
+  requestId?: string | null;
 };
+
+export type BootstrapResponse = RoomCreateResponse & {
+  requiresTakeover: boolean;
+  stateVersion: number;
+  room: RoomUpdatedEvent;
+  game: PublicGameStateEvent | null;
+  private: PlayerPrivateStateEvent | null;
+  attemptId: string | null;
+};
+
+export type SystemConnectedEvent = {
+  sid: string;
+  message: string;
+  serverEpoch: string;
+  serverTime: number;
+  idempotencyTtlMs: number;
+};
+export type SessionReplacedEvent = { message: string };

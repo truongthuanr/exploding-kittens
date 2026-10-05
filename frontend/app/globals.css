@@ -1,0 +1,15 @@
+:root { color-scheme: light; font-family: system-ui, sans-serif; color: #192832; background: #f4f6f8; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1250px; margin: auto; padding: 32px 24px; }
+h1 { font-size: 2.4rem; margin: 8px 0; } h2 { font-size: 1.1rem; margin-top: 0; }
+.eyebrow { font-size: .75rem; letter-spacing: .12em; color: #426478; }
+section { background: white; border: 1px solid #d8e0e5; border-radius: 10px; padding: 20px; margin: 20px 0; }
+.status, .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.status span { overflow-wrap: anywhere; } label { display: inline-flex; flex-direction: column; gap: 6px; margin: 0 12px 14px 0; }
+input, button { font: inherit; border: 1px solid #c4d0d8; border-radius: 6px; padding: 10px 12px; }
+button { background: #144e68; color: white; cursor: pointer; } button:disabled { opacity: .45; cursor: default; }
+[role=alert] { background: #fff0d7; padding: 14px; overflow-wrap: anywhere; }
+.snapshots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+pre { background: #f0f4f6; padding: 12px; overflow: auto; max-height: 440px; font-size: .8rem; }
+@media (max-width: 800px) { .snapshots { grid-template-columns: 1fr; } }

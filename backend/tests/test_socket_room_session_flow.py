@@ -1058,7 +1058,7 @@ def test_reconnect_snapshot_excludes_other_players_secrets(monkeypatch):
     # An allowlist catches new accidental public fields, including nested hand data.
     assert set(public) == {
         "roomId", "phase", "currentPlayerId", "pendingDraws", "turnNumber", "players",
-        "discardTopCardType", "discardCount", "winnerPlayerId", "recentAction",
+        "discardTopCardType", "discardCount", "winnerPlayerId", "recentAction", "stateVersion",
     }
     assert all(set(player) == {"playerId", "nickname", "handCount", "status"}
                for player in public["players"])

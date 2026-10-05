@@ -1,4 +1,6 @@
 import asyncio
+from functools import wraps
+from time import time
 from collections import OrderedDict
 
 import socketio
@@ -49,7 +51,11 @@ from app.modules.room.errors import (
 )
 from app.modules.session import SessionNotFoundError, SessionService, SessionRegistry
 from app.modules.session.models import PlayerSession
+from app.realtime.admission import AdmissionCache, AdmissionError, EPOCH, TTL_MS
+from app.schemas.responses import BootstrapResponse
 from app.realtime.game_events import (
+    to_public_game_state,
+    to_player_private_state,
     build_recent_action,
     emit_game_ended,
     emit_game_state,
@@ -93,6 +99,81 @@ sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=settings.cors_origins,
 )
+
+# MVP uses one gateway transaction lock: all mutations and bootstrap serialization
+# share an ordering boundary, including admission, presence and ownership changes.
+# Engine room locks remain useful for service callers. Do not await a bound socket's
+# disconnect inside this lock: takeover first removes its binding.
+gateway_lock = asyncio.Lock()
+admission_cache = AdmissionCache()
+
+
+def serialized(handler):
+    @wraps(handler)
+    async def wrapped(*args, **kwargs):
+        async with gateway_lock:
+            return await handler(*args, **kwargs)
+    return wrapped
+
+
+def advance_version(room_id: str) -> None:
+    room = room_service.registry.get_by_id(room_id)
+    room.state_version += 1
+    runtime = game_registry.get(room_id)
+    if runtime:
+        runtime.state_version = room.state_version
+
+
+def bootstrap(session: PlayerSession, attempt_id: str | None = None) -> dict:
+    room = room_service.registry.get_by_id(session.room_id)
+    runtime = game_registry.get(session.room_id)
+    private = to_player_private_state(runtime.player_private_states[session.player_id]) if runtime else None
+    if private:
+        private.stateVersion = room.state_version
+    public = to_public_game_state(runtime) if runtime else None
+    if public:
+        public.stateVersion = room.state_version
+    return BootstrapResponse(
+        roomId=room.room_id, roomCode=room.room_code, playerId=session.player_id,
+        playerSessionId=session.player_session_id, stateVersion=room.state_version,
+        room=to_room_updated_event(room), game=public, private=private, attemptId=attempt_id,
+    ).model_dump(mode="json")
+
+
+async def bind_owner(
+    session: PlayerSession, sid: str, instance: str | None, takeover: bool = False,
+) -> None:
+    owner = session_service.get_session_by_socket(sid)
+    if owner is not None and owner is not session:
+        raise ValueError("Socket already has a session binding")
+    if session.client_instance_id is not None:
+        if instance is None:
+            raise AdmissionError("session_in_use", "This session requires its client instance identity")
+        competing = session.client_instance_id != instance or (
+            session.socket_id is not None and session.socket_id != sid
+        )
+        if competing and not takeover:
+            raise AdmissionError("session_in_use", "Choose Continue in this tab to take over the session")
+    old_sid = session.socket_id
+    session_service.rebind_socket(session.player_session_id, sid)
+    session.client_instance_id = instance
+    if old_sid and old_sid != sid and instance is not None:
+        await sio.emit("session:replaced", {"message": "Session continued in another tab"}, to=old_sid)
+        await sio.disconnect(old_sid)
+    await sio.enter_room(sid, session.room_id)
+    room = room_service.registry.get_by_id(session.room_id)
+    room.get_player(session.player_id).status = PlayerStatus.CONNECTED
+    runtime = game_registry.get(session.room_id)
+    if runtime:
+        for player in runtime.game_state.players:
+            if player.player_id == session.player_id and player.status is not PlayerStatus.ELIMINATED:
+                player.status = PlayerStatus.CONNECTED
+    advance_version(session.room_id)
+    await sio.emit("room:updated", to_room_updated_event(room).model_dump(), room=room.room_id)
+    if runtime and instance is not None:
+        await emit_game_state(sio, runtime)
+        await emit_private_states(sio, session_service, runtime)
+
 
 REQUEST_MODELS: dict[str, type[BaseModel]] = {
     "room:create": RoomCreateRequest,
@@ -300,6 +381,7 @@ async def emit_action_result(
     target_player_id: str | None = None,
 ) -> None:
     runtime = result.runtime
+    advance_version(runtime.game_state.room_id)
     recent_action = build_recent_action(
         actor_player_id=result.player_id,
         action_type=action_type,
@@ -342,7 +424,10 @@ async def validate_socket_payload(
     try:
         return model.model_validate(data or {})
     except ValidationError as error:
-        await emit_invalid_payload_error(sid, event_name, error)
+        correlation = (data.get("attemptId") or data.get("requestId")) if isinstance(data, dict) else None
+        await emit_socket_error(sid, "invalid_payload",
+            f"Invalid payload for {event_name} ({len(error.errors())} validation error(s))",
+            correlation if isinstance(correlation, str) else None)
         return None
 
 
@@ -364,93 +449,98 @@ async def connect(sid: str, environ: dict, auth: dict | None) -> None:
     del environ, auth
     await sio.emit(
         "system:connected",
-        {"sid": sid, "message": "Socket.IO connection established"},
+        {"sid": sid, "message": "Socket.IO connection established", "serverEpoch": EPOCH,
+         "serverTime": int(time() * 1000), "idempotencyTtlMs": TTL_MS},
         to=sid,
     )
 
 
 @sio.event
-async def disconnect(sid: str) -> None:
-    session = session_service.unbind_socket(sid)
-    if session is None:
+async def disconnect(sid: str, reason=None) -> None:
+    # A replaced socket is already unbound; this also avoids reentering the lock.
+    if session_service.get_session_by_socket(sid) is None:
         return
+    async with gateway_lock:
+        session = session_service.unbind_socket(sid)
+        if session is None:
+            return
+        room = room_service.registry.get_by_id(session.room_id)
+        player = room.get_player(session.player_id)
+        if player is None:
+            return
+        player.status = PlayerStatus.DISCONNECTED
+        runtime = game_registry.get(session.room_id)
+        if runtime:
+            for summary in runtime.game_state.players:
+                if summary.player_id == session.player_id and summary.status is not PlayerStatus.ELIMINATED:
+                    summary.status = PlayerStatus.DISCONNECTED
+        advance_version(room.room_id)
+        await sio.emit("room:updated", to_room_updated_event(room).model_dump(), room=room.room_id)
+        if runtime and session.client_instance_id is not None:
+            await emit_game_state(sio, runtime)
+            await emit_private_states(sio, session_service, runtime)
 
-    room = room_service.registry.get_by_id(session.room_id)
-    player = room.get_player(session.player_id)
-    if player is None:
-        return
 
-    player.status = PlayerStatus.DISCONNECTED
-    await sio.emit("room:updated", to_room_updated_event(room).model_dump(), room=room.room_id)
+async def admit(sid: str, event: str, data: dict | None) -> dict | None:
+    payload = await validate_socket_payload(sid, event, data)
+    if payload is None:
+        return None
+    request_id = payload.requestId
+    fingerprint = (event, payload.clientInstanceId, payload.nickname, getattr(payload, "roomCode", None))
+    try:
+        if request_id:
+            entry = admission_cache.lookup(request_id, fingerprint)
+            if entry:
+                session = session_service.get_session(entry.session_id)
+                try:
+                    await bind_owner(session, sid, payload.clientInstanceId)
+                except AdmissionError as error:
+                    if error.code != "session_in_use":
+                        raise
+                    # The replay key recovers identity, but never silently takes ownership.
+                    # A different instance still needs an explicit reconnect takeover.
+                    return {**bootstrap(session), "requiresTakeover": True}
+                return bootstrap(session)
+        if session_service.get_session_by_socket(sid) is not None:
+            raise ValueError("Socket already has a session binding")
+        result = (room_service.create_room(payload.nickname) if event == "room:create"
+                  else room_service.join_room(payload.roomCode, payload.nickname))
+        session = session_service.create_session(result.player.player_id, result.room.room_id)
+        session.client_instance_id = payload.clientInstanceId
+        session_service.bind_socket(session.player_session_id, sid)
+        # Record before any network await: loss of the ack must not repeat creation.
+        if request_id:
+            admission_cache.remember(request_id, fingerprint, session.player_session_id)
+        advance_version(session.room_id)
+        await sio.enter_room(sid, result.room.room_id)
+        await sio.emit("room:updated", to_room_updated_event(result.room).model_dump(), room=result.room.room_id)
+        if request_id:
+            return bootstrap(session)
+        return RoomCreateResponse(roomId=result.room.room_id, roomCode=result.room.room_code,
+            playerId=session.player_id, playerSessionId=session.player_session_id).model_dump()
+    except AdmissionError as error:
+        await emit_socket_error(sid, error.code, str(error), request_id)
+    except SessionNotFoundError:
+        await emit_socket_error(sid, "invalid_session", "Admission session is no longer available", request_id)
+    except SERVICE_ERROR_TYPES as error:
+        await emit_service_error(sid, error, request_id)
+    return None
 
 
 @sio.on("room:create")
+@serialized
 async def handle_room_create(sid: str, data: dict | None) -> dict | None:
-    payload = await validate_socket_payload(sid, "room:create", data)
-    if payload is None:
-        return None
-
-    try:
-        if session_service.get_session_by_socket(sid) is not None:
-            raise ValueError("Socket already has a session binding")
-        result = room_service.create_room(payload.nickname)
-        session = session_service.create_session(
-            player_id=result.player.player_id,
-            room_id=result.room.room_id,
-        )
-        session_service.bind_socket(session.player_session_id, sid)
-        await sio.enter_room(sid, result.room.room_id)
-        await sio.emit(
-            "room:updated",
-            to_room_updated_event(result.room).model_dump(),
-            room=result.room.room_id,
-        )
-    except SERVICE_ERROR_TYPES as error:
-        await emit_service_error(sid, error)
-        return None
-
-    return RoomCreateResponse(
-        roomId=result.room.room_id,
-        roomCode=result.room.room_code,
-        playerId=result.player.player_id,
-        playerSessionId=session.player_session_id,
-    ).model_dump()
+    return await admit(sid, "room:create", data)
 
 
 @sio.on("room:join")
+@serialized
 async def handle_room_join(sid: str, data: dict | None) -> dict | None:
-    payload = await validate_socket_payload(sid, "room:join", data)
-    if payload is None:
-        return None
-
-    try:
-        if session_service.get_session_by_socket(sid) is not None:
-            raise ValueError("Socket already has a session binding")
-        result = room_service.join_room(payload.roomCode, payload.nickname)
-        session = session_service.create_session(
-            player_id=result.player.player_id,
-            room_id=result.room.room_id,
-        )
-        session_service.bind_socket(session.player_session_id, sid)
-        await sio.enter_room(sid, result.room.room_id)
-        await sio.emit(
-            "room:updated",
-            to_room_updated_event(result.room).model_dump(),
-            room=result.room.room_id,
-        )
-    except SERVICE_ERROR_TYPES as error:
-        await emit_service_error(sid, error)
-        return None
-
-    return RoomJoinResponse(
-        roomId=result.room.room_id,
-        roomCode=result.room.room_code,
-        playerId=result.player.player_id,
-        playerSessionId=session.player_session_id,
-    ).model_dump()
+    return await admit(sid, "room:join", data)
 
 
 @sio.on("room:ready")
+@serialized
 async def handle_room_ready(sid: str, data: dict | None) -> None:
     payload = await validate_socket_payload(sid, "room:ready", data)
     if payload is None:
@@ -462,6 +552,7 @@ async def handle_room_ready(sid: str, data: dict | None) -> None:
 
     try:
         room = room_service.set_ready(session.room_id, session.player_id, payload.isReady)
+        advance_version(room.room_id)
         await sio.emit(
             "room:updated",
             to_room_updated_event(room).model_dump(),
@@ -472,6 +563,7 @@ async def handle_room_ready(sid: str, data: dict | None) -> None:
 
 
 @sio.on("game:start")
+@serialized
 async def handle_game_start(sid: str, data: dict | None) -> None:
     payload = await validate_socket_payload(sid, "game:start", data)
     if payload is None:
@@ -498,6 +590,7 @@ async def handle_game_start(sid: str, data: dict | None) -> None:
         runtime = GameRuntimeState.from_setup_result(setup_result)
         game_registry.add(runtime)
         room.status = RoomStatus.IN_GAME
+        advance_version(room.room_id)
         await sio.emit(
             "room:updated",
             to_room_updated_event(room).model_dump(),
@@ -527,6 +620,7 @@ async def handle_game_start(sid: str, data: dict | None) -> None:
 
 
 @sio.on("turn:play-card")
+@serialized
 async def handle_turn_play_card(sid: str, data: dict | None) -> None:
     payload = await validate_socket_payload(sid, "turn:play-card", data)
     if payload is None:
@@ -610,6 +704,7 @@ async def handle_turn_play_card(sid: str, data: dict | None) -> None:
 
 
 @sio.on("turn:draw-card")
+@serialized
 async def handle_turn_draw_card(sid: str, data: dict | None) -> None:
     payload = await validate_socket_payload(sid, "turn:draw-card", data)
     if payload is None:
@@ -653,39 +748,35 @@ async def handle_turn_draw_card(sid: str, data: dict | None) -> None:
 
 
 @sio.on("player:reconnect")
-async def handle_player_reconnect(sid: str, data: dict | None) -> None:
+@serialized
+async def handle_player_reconnect(sid: str, data: dict | None) -> dict | None:
     payload = await validate_socket_payload(sid, "player:reconnect", data)
     if payload is None:
         return
 
+    correlation = payload.attemptId
     try:
-        session = session_service.rebind_socket(payload.playerSessionId, sid)
+        session = session_service.get_session(payload.playerSessionId)
+        if session.client_instance_id is not None and (not payload.clientInstanceId or not payload.attemptId):
+            raise AdmissionError("invalid_payload", "clientInstanceId and attemptId are required")
+        await bind_owner(session, sid, payload.clientInstanceId, payload.takeover)
+        result = bootstrap(session, payload.attemptId)
+        # Preserve legacy backend-only clients' event bootstrap during migration.
+        if payload.clientInstanceId is None:
+            runtime = game_registry.get(session.room_id)
+            if runtime is not None:
+                await emit_requester_snapshot(sio, sid, runtime, session.player_id)
+                if runtime.game_state.phase is not GamePhase.FINISHED:
+                    await emit_turn_started_to_sid(sio, sid, runtime)
+        return result
     except SessionNotFoundError:
-        await emit_socket_error(
-            sid,
-            "invalid_session",
-            f"Invalid player session: {payload.playerSessionId}",
-        )
-        return
-    except ValueError as error:
-        await emit_service_error(sid, error)
-        return
-
-    await sio.enter_room(sid, session.room_id)
-
-    room = room_service.registry.get_by_id(session.room_id)
-    player = room.get_player(session.player_id)
-    if player is None:
-        return
-
-    player.status = PlayerStatus.CONNECTED
-    await sio.emit("room:updated", to_room_updated_event(room).model_dump(), room=room.room_id)
-
-    runtime = game_registry.get(session.room_id)
-    if runtime is not None:
-        await emit_requester_snapshot(sio, sid, runtime, session.player_id)
-        if runtime.game_state.phase is not GamePhase.FINISHED:
-            await emit_turn_started_to_sid(sio, sid, runtime)
+        await emit_socket_error(sid, "invalid_session",
+            f"Invalid player session: {payload.playerSessionId}", correlation)
+    except AdmissionError as error:
+        await emit_socket_error(sid, error.code, str(error), correlation)
+    except SERVICE_ERROR_TYPES as error:
+        await emit_service_error(sid, error, correlation)
+    return None
 
 
 def build_socket_app(fastapi_app: FastAPI) -> socketio.ASGIApp:

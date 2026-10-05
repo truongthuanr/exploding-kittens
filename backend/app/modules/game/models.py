@@ -59,6 +59,7 @@ class GameSetupResult:
 class GameRuntimeState:
     game_state: ServerGameState
     player_private_states: dict[str, PlayerPrivateState]
+    state_version: int = 0
     pending_explosion_card: CardInstance | None = None
 
     @classmethod
