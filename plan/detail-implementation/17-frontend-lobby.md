@@ -8,6 +8,10 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 - Reuse the existing realtime provider/hooks and shared contracts.
 - Do not create another socket connection or a second authoritative room state.
 
+## Design artifact
+
+- `plan/detail-implementation/17-frontend-lobby-ui-design.md`
+
 ## Implementation decisions
 
 - Use one application route for the MVP and select the Home, Lobby, or Game boundary from realtime state.
@@ -69,6 +73,19 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 - Show connecting, reconnecting, restoring, restore-failed, replaced/session-in-use, and degraded-storage states.
 - Provide retry restore and explicit takeover actions through the existing client API.
 - Never show private or room data from another session.
+
+## UI design checklist
+
+- [ ] Define and document the Home, Lobby, Recovery, Game-loading, and Game-boundary view hierarchy in `17-frontend-lobby-ui-design.md`.
+- [ ] Map the create, join, ready, start, reconnect, restore, and takeover user flows.
+- [ ] Create low-fidelity wireframes for Home, Lobby, and Session Recovery.
+- [ ] Design mobile and desktop layouts.
+- [ ] Define the component inventory and UI states.
+- [ ] Define basic visual tokens for color, typography, spacing, radius, and status badges.
+- [ ] Design default, focus, disabled, loading, success, and error states for controls.
+- [ ] Verify that every realtime and session state has a corresponding UI state.
+- [ ] Review keyboard navigation, focus order, announcements, contrast, and non-color status indicators.
+- [ ] Approve the wireframes and state matrix before implementation begins.
 
 ## Implementation checklist
 
