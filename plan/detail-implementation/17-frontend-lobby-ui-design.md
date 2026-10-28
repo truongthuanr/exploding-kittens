@@ -10,6 +10,7 @@ This document is the UI/UX design artifact for `17-frontend-lobby.md`. The backe
 Room flow
 ├── Home
 ├── Session recovery
+│   ├── Saved-session / pending-admission conflict
 │   ├── Restoring
 │   ├── Restore failed
 │   └── Session replaced / takeover
@@ -19,26 +20,34 @@ Room flow
 └── Finished boundary
 ```
 
-The MVP uses one application route. A pure selector chooses the active view from realtime state.
+The MVP uses one application route. A pure selector chooses the active view from realtime state. Connection and storage warnings, plus action errors, are messages within the selected view; they do not select a different view by themselves.
 
 ## State-to-view matrix
 
-Evaluation follows the order below so recovery states take precedence over retained room data.
+Evaluate the rows in order. A usable room snapshot belongs to `identity.roomId` and contains `identity.playerId`. A usable game pair has both public and private snapshots, belongs to the current room/player, and has the same `stateVersion`. A current game pair must also have `stateVersion >= room.stateVersion`; the room snapshot may be older because game actions do not always emit a room update. Never select a room or game view from snapshots that fail these checks.
 
 | Priority | Realtime condition | View |
 | --- | --- | --- |
 | 1 | Session is `replaced` | Session replaced / takeover |
-| 2 | Session is `restore_failed` | Restore failed |
-| 3 | Identity exists and session is `none` or `restoring` | Restoring |
-| 4 | Identity is absent, or session is `invalid` | Home |
-| 5 | Session is `joining` or `join_failed` | Home with admission state |
-| 6 | Session is ready and room is `waiting` | Lobby |
-| 7 | Room is `in_game`, but synchronization or snapshots are incomplete | Game loading |
-| 8 | Room is `in_game`, synchronization is complete, and public/private snapshots match | Game boundary |
-| 9 | Room or game is `finished` | Finished boundary |
-| 10 | State is incomplete or unsupported | Safe recovery/loading state |
+| 2 | Session is `invalid` | Home with invalid-session explanation |
+| 3 | Identity exists and (`pendingAdmission` is true or session is `joining`/`join_failed`) | Blocking saved-session / pending-admission conflict; no room/private data or admission actions |
+| 4 | No identity, and `pendingAdmission` is true or session is `joining`/`join_failed` | Home with admission pending, retry, or discard state |
+| 5 | No identity | Home |
+| 6 | Identity and usable waiting-room snapshot exist, connection is `disconnected` or `reconnecting`, and session is `restore_failed` | Read-only Lobby with reconnect/retry message |
+| 7 | Identity exists and session is `none` or `restoring` | Restoring; do not show retained room/private data |
+| 8 | Session is `restore_failed` | Restore failed; do not show retained room/private data |
+| 9 | Session is `ready`, but the room snapshot is missing or unusable | Safe recovery/loading state; no room/private data |
+| 10 | Session is `ready` and room is `waiting` | Lobby; disable actions unless connected and synchronized |
+| 11 | Session is `ready`, room is `in_game` or `finished`, and (`syncing` is true, the current game pair is unavailable, or room is `finished` while game phase is not `finished`) | Game loading / finishing synchronization |
+| 12 | Session is `ready`, room is `in_game` or `finished`, the current game pair is available, and game phase is `finished` | Finished boundary |
+| 13 | Session is `ready`, room is `in_game`, the current game pair is available, and game phase is active | Game boundary |
+| 14 | State is inconsistent or unsupported | Safe recovery/loading state; no room/private data |
 
-Matching game snapshots means both snapshots exist, belong to the current identity/room, and have the same `stateVersion`.
+The read-only Lobby in row 6 uses only the retained waiting-room snapshot. It exposes no actions, never renders private game data, and offers retry restore while offline. Once reconnect/restore begins, row 7 takes over until an authoritative bootstrap succeeds. A failed restore while connected uses row 8. `syncing` may also be true while a waiting-room snapshot remains visible; row 10 keeps the Lobby visible but disables Ready and Start.
+
+`pendingAdmission` takes precedence over the generic no-identity Home row because Create/Join normally run without an identity. Row 3 can occur when saved identity and a pending admission coexist after reload or cross-tab storage changes. Explain that the pending request may have succeeded even if its acknowledgement was lost. Offer one explicit action, **Continue saved session**: abandon the pending admission, clear its local record, then restore the saved identity through the existing reconnect flow. This action needs a client API that can resolve the conflict atomically; `discardAdmission()` currently refuses to run while identity exists, and automatic restore currently waits while a pending admission exists. Keep this view blocking until the action completes. If restore fails, use row 8; never reveal retained room/private data during the conflict. An abandoned unknown admission may leave a disconnected seat on the server, so explain that consequence before the action. Do not silently clear either record or create another admission.
+
+For rows 11-13, a newer room snapshot must not be paired with an older game pair. A finished room with an active or missing game pair remains in finishing synchronization until a current finished pair arrives. A finished game pair can select Finished while the room snapshot still says `in_game`, because the game pair is authoritative for the phase. Action errors and `storageDegraded` do not change the selected view: show them as accessible messages in the current view.
 
 ## User flows
 
@@ -49,6 +58,7 @@ Lobby → Ready/Unready → Updated lobby snapshot
 Lobby host → Start → Game loading → Game boundary
 Reload → Restore → Lobby or Game boundary
 Restore failed → Retry restore
+Saved-session / pending-admission conflict → Continue saved session → Restore
 Session replaced → Explicit takeover → Restore
 Invalid session → Home with an explanatory message
 ```
@@ -116,7 +126,7 @@ Admission failures remain on Home and provide an error plus retry/discard action
 └──────────────────────────────────────────┘
 ```
 
-Messages and available actions vary for restoring, restore failure, invalid session, and replaced session. Stale lobby or private data is never rendered behind this view.
+Messages and available actions vary for restoring, restore failure, invalid session, replaced session, and the saved-session / pending-admission conflict. Stale lobby or private data is never rendered behind this view.
 
 ## Game loading and boundaries
 

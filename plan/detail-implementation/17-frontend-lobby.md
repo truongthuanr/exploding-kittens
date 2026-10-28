@@ -63,8 +63,8 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 
 ### Match boundary
 
-- Enter the Game boundary only when the room is `in_game`, the session is ready, synchronization is complete, and matching public/private game snapshots exist.
-- Show a loading boundary while the room is `in_game` but game snapshots are still synchronizing.
+- Enter the Game boundary only when the room is `in_game`, the session is ready, synchronization is complete, and matching public/private game snapshots exist at a version no older than the room snapshot.
+- Show a loading boundary while the room is `in_game` but game snapshots are still synchronizing. Keep a finished room in finishing synchronization until a current finished game pair arrives.
 - Restore an active match directly into the Game boundary.
 - Provide only a temporary Game placeholder; playable game UI belongs to the next issue.
 
@@ -72,6 +72,7 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 
 - Show connecting, reconnecting, restoring, restore-failed, replaced/session-in-use, and degraded-storage states.
 - Provide retry restore and explicit takeover actions through the existing client API.
+- Resolve the saved-identity / pending-admission conflict through an explicit client action before showing room data. Extend the realtime client with a conflict-resolution method that abandons the pending request and restores the saved identity without changing backend contracts. Explain that an unknown admission may have left a disconnected seat.
 - Never show private or room data from another session.
 
 ## UI design checklist
@@ -92,8 +93,9 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 ### 1. View selection and shared states
 
 - [ ] Replace the development screen with Home, Lobby, and Game-boundary views.
-- [ ] Add pure selectors for active view, action availability, and start eligibility.
-- [ ] Handle connection, restore, invalid-session, replaced-session, takeover, and degraded-storage states.
+- [x] Add pure selectors for active view, action availability, and start eligibility.
+- [ ] Handle connection, restore, invalid-session, replaced-session, takeover, degraded-storage, and saved-identity / pending-admission conflict states.
+- [ ] Add a client method to explicitly abandon a conflicting pending admission and restore the saved identity; keep room/private data hidden until restore succeeds.
 - [ ] Map backend error codes to concise user-facing messages.
 - [ ] Add accessible live status/error announcements.
 
@@ -120,7 +122,7 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 
 ### 5. Match boundary
 
-- [ ] Wait for synchronized public/private game snapshots before entering Game.
+- [ ] Wait for synchronized public/private game snapshots no older than the room snapshot before entering Game or Finished.
 - [ ] Show a synchronization/loading boundary when required.
 - [ ] Restore active games directly into the Game placeholder.
 
@@ -140,6 +142,7 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 - [ ] E2E: start as host and transition every client to Game.
 - [ ] E2E: reload and reconnect into the correct Lobby or Game view.
 - [ ] E2E: cover restore failure and explicit session takeover.
+- [ ] Test the saved-identity / pending-admission conflict and a finished-room event arriving before its matching game pair.
 
 ## Out of scope
 
