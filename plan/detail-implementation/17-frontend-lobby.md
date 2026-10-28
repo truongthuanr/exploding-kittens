@@ -77,12 +77,12 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 
 ## UI design checklist
 
-- [ ] Define and document the Home, Lobby, Recovery, Game-loading, and Game-boundary view hierarchy in `17-frontend-lobby-ui-design.md`.
-- [ ] Map the create, join, ready, start, reconnect, restore, and takeover user flows.
-- [ ] Create low-fidelity wireframes for Home, Lobby, and Session Recovery.
-- [ ] Design mobile and desktop layouts.
-- [ ] Define the component inventory and UI states.
-- [ ] Define basic visual tokens for color, typography, spacing, radius, and status badges.
+- [x] Define and document the Home, Lobby, Recovery, Game-loading, and Game-boundary view hierarchy in `17-frontend-lobby-ui-design.md`.
+- [x] Map the create, join, ready, start, reconnect, restore, and takeover user flows.
+- [x] Create low-fidelity wireframes for Home, Lobby, and Session Recovery.
+- [x] Design mobile and desktop layouts.
+- [x] Define the component inventory and UI states.
+- [x] Define basic visual tokens for color, typography, spacing, radius, and status badges.
 - [ ] Design default, focus, disabled, loading, success, and error states for controls.
 - [ ] Verify that every realtime and session state has a corresponding UI state.
 - [ ] Review keyboard navigation, focus order, announcements, contrast, and non-color status indicators.
@@ -92,50 +92,50 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 
 ### 1. View selection and shared states
 
-- [ ] Replace the development screen with Home, Lobby, and Game-boundary views.
+- [x] Replace the development screen with Home, Lobby, and Game-boundary views.
 - [x] Add pure selectors for active view, action availability, and start eligibility.
-- [ ] Handle connection, restore, invalid-session, replaced-session, takeover, degraded-storage, and saved-identity / pending-admission conflict states.
-- [ ] Add a client method to explicitly abandon a conflicting pending admission and restore the saved identity; keep room/private data hidden until restore succeeds.
+- [x] Handle connection, restore, invalid-session, replaced-session, takeover, degraded-storage, and saved-identity / pending-admission conflict states.
+- [x] Add a client method to explicitly abandon a conflicting pending admission and restore the saved identity; keep room/private data hidden until restore succeeds.
 - [ ] Map backend error codes to concise user-facing messages.
-- [ ] Add accessible live status/error announcements.
+- [x] Add accessible live status/error announcements.
 
 ### 2. Home
 
 - [ ] Build accessible Create Room and Join Room forms.
-- [ ] Validate and trim required inputs.
+- [x] Validate and trim required inputs.
 - [ ] Implement pending, retry, discard, timeout, and admission-error states.
-- [ ] Open Lobby only after identity and room bootstrap are ready.
+- [x] Open Lobby only after identity and room bootstrap are ready.
 
 ### 3. Lobby
 
-- [ ] Render room metadata and players from authoritative state.
-- [ ] Mark the host, current player, readiness, and connection status.
-- [ ] Handle missing snapshots and transient disconnection safely.
-- [ ] Keep authoritative room data out of component-local state.
+- [x] Render room metadata and players from authoritative state.
+- [x] Mark the host, current player, readiness, and connection status.
+- [x] Handle missing snapshots and transient disconnection safely.
+- [x] Keep authoritative room data out of component-local state.
 
 ### 4. Ready and start actions
 
-- [ ] Implement Ready/Unready with repeated-submission protection.
-- [ ] Implement host-only Start with player-count, readiness, and connection checks.
-- [ ] Explain why Start is unavailable.
-- [ ] Lock actions while Start is pending and release them on authoritative success or error.
+- [x] Implement Ready/Unready with repeated-submission protection.
+- [x] Implement host-only Start with player-count, readiness, and connection checks.
+- [x] Explain why Start is unavailable.
+- [x] Lock actions while Start is pending and release them on authoritative success or error.
 
 ### 5. Match boundary
 
-- [ ] Wait for synchronized public/private game snapshots no older than the room snapshot before entering Game or Finished.
-- [ ] Show a synchronization/loading boundary when required.
-- [ ] Restore active games directly into the Game placeholder.
+- [x] Wait for synchronized public/private game snapshots no older than the room snapshot before entering Game or Finished.
+- [x] Show a synchronization/loading boundary when required.
+- [x] Restore active games directly into the Game placeholder.
 
 ### 6. Responsive and accessible UI
 
 - [ ] Verify desktop and mobile layouts without horizontal overflow.
 - [ ] Provide keyboard operation and visible focus, disabled, loading, and error states.
-- [ ] Do not use color as the only host/readiness indicator.
+- [x] Do not use color as the only host/readiness indicator.
 - [ ] Check basic text and control contrast.
 
 ### 7. Tests
 
-- [ ] Unit-test pure view and eligibility selectors.
+- [x] Unit-test pure view and eligibility selectors.
 - [ ] E2E: create a room and join from two additional browser contexts.
 - [ ] E2E: synchronize membership and readiness across all clients.
 - [ ] E2E: block non-host, not-ready, disconnected-player, and fewer-than-three start cases.
