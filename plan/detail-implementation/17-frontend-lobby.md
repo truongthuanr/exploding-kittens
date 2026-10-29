@@ -128,21 +128,21 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 
 ### 6. Responsive and accessible UI
 
-- [ ] Verify desktop and mobile layouts without horizontal overflow.
-- [ ] Provide keyboard operation and visible focus, disabled, loading, and error states.
+- [x] Verify desktop and mobile layouts without horizontal overflow.
+- [x] Provide keyboard operation and visible focus, disabled, loading, and error states.
 - [x] Do not use color as the only host/readiness indicator.
-- [ ] Check basic text and control contrast.
+- [x] Check basic text and control contrast.
 
 ### 7. Tests
 
 - [x] Unit-test pure view and eligibility selectors.
-- [ ] E2E: create a room and join from two additional browser contexts.
-- [ ] E2E: synchronize membership and readiness across all clients.
-- [ ] E2E: block non-host, not-ready, disconnected-player, and fewer-than-three start cases.
-- [ ] E2E: start as host and transition every client to Game.
-- [ ] E2E: reload and reconnect into the correct Lobby or Game view.
-- [ ] E2E: cover restore failure and explicit session takeover.
-- [ ] Test the saved-identity / pending-admission conflict and a finished-room event arriving before its matching game pair.
+- [x] E2E: create a room and join from two additional browser contexts.
+- [x] E2E: synchronize membership and readiness across all clients.
+- [x] E2E: block non-host, not-ready, disconnected-player, and fewer-than-three start cases.
+- [x] E2E: start as host and transition every client to Game.
+- [x] E2E: reload and reconnect into the correct Lobby or Game view.
+- [x] E2E: cover restore failure and explicit session takeover.
+- [x] Test the saved-identity / pending-admission conflict and a finished-room event arriving before its matching game pair.
 
 ## Out of scope
 

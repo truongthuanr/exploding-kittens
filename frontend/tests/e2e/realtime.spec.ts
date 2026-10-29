@@ -31,11 +31,21 @@ test("three players create, join, ready, start, and restore into the game bounda
     const code = await create(pages[0], "Host");
     await expect(pages[0].getByRole("button", { name: "Start game" })).toBeDisabled();
     await join(pages[1], "Bob", code);
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeDisabled();
+    await expect(pages[0].getByText("Cần từ 3 đến 5 người chơi.")).toBeVisible();
     await join(pages[2], "Cat", code);
+    for (const page of pages) await expect(page.locator(".player")).toHaveCount(3);
+    await pages[1].reload();
+    await expect(pages[1].getByTestId("room-code")).toHaveText(code);
+    await pages[0].getByRole("button", { name: "Ready", exact: true }).click();
+    await pages[1].getByRole("button", { name: "Ready", exact: true }).click();
     for (const page of pages) {
-      await expect(page.locator(".player")).toHaveCount(3);
-      await page.getByRole("button", { name: "Ready", exact: true }).click();
+      await expect(page.locator(".player .badge").filter({ hasText: /^Ready$/ })).toHaveCount(2);
     }
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeDisabled();
+    await expect(pages[0].getByText("Tất cả người chơi cần Ready.")).toBeVisible();
+    await pages[2].getByRole("button", { name: "Ready", exact: true }).click();
+    for (const page of pages) await expect(page.locator(".player .badge").filter({ hasText: /^Ready$/ })).toHaveCount(3);
     await expect(pages[1].getByRole("button", { name: "Start game" })).toHaveCount(0);
     await expect(pages[0].getByRole("button", { name: "Start game" })).toBeEnabled();
     await pages[0].getByRole("button", { name: "Start game" }).click();
@@ -106,4 +116,66 @@ test("Home validates the selected form and submits with Enter", async ({ browser
     await guest.getByLabel("Room code", { exact: true }).press("Enter");
     await expect(guest.getByTestId("room-code")).toHaveText(code!);
   } finally { await hostContext.close(); await guestContext.close(); }
+});
+
+test("a disconnected player blocks Start until that player restores the Lobby", async ({ browser }) => {
+  const contexts = await Promise.all([browser.newContext(), browser.newContext(), browser.newContext()]);
+  try {
+    const pages = await Promise.all(contexts.map(context => context.newPage()));
+    const code = await create(pages[0], "Host");
+    await join(pages[1], "Bob", code);
+    await join(pages[2], "Cat", code);
+    for (const page of pages) await page.getByRole("button", { name: "Ready", exact: true }).click();
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeEnabled();
+    await pages[2].close();
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeDisabled();
+    await expect(pages[0].getByText("Tất cả người chơi cần kết nối.")).toBeVisible();
+    const restored = await contexts[2].newPage();
+    await restored.goto("/");
+    await expect(restored.getByRole("heading", { name: "Phiên đang hoạt động ở tab khác" })).toBeVisible();
+    await restored.getByRole("button", { name: "Tiếp tục ở tab này" }).click();
+    await expect(restored.getByTestId("room-code")).toHaveText(code);
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeEnabled();
+  } finally { await Promise.all(contexts.map(context => context.close())); }
+});
+
+test("Home and Lobby fit mobile and desktop and expose keyboard focus", async ({ page }) => {
+  for (const width of [320, 375, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    await connected(page);
+    await expect(page.getByRole("heading", { name: "Chơi cùng bạn bè" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("radio", { name: "Tạo phòng" })).toBeFocused();
+    expect(await page.getByRole("radio", { name: "Tạo phòng" }).evaluate(el => getComputedStyle(el).outlineStyle)).not.toBe("none");
+  }
+  await page.getByLabel("Nickname", { exact: true }).fill("A long player nickname for responsive layout");
+  await page.getByRole("button", { name: "Create room" }).click();
+  await expect(page.getByTestId("room-code")).toBeVisible();
+  for (const width of [320, 375, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await expect(page.getByRole("button", { name: "Start game" })).toBeDisabled();
+    await expect(page.getByText("Cần từ 3 đến 5 người chơi.")).toBeVisible();
+  }
+  const contrasts = await page.evaluate(() => {
+    const rgb = (value: string) => value.match(/\d+/g)!.slice(0, 3).map(Number);
+    const luminance = (color: number[]) => color.map(channel => {
+      const c = channel / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    }).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+    const ratio = (foreground: string, background: string) => {
+      const [light, dark] = [luminance(rgb(foreground)), luminance(rgb(background))].sort((a, b) => b - a);
+      return (light + 0.05) / (dark + 0.05);
+    };
+    const panel = document.querySelector(".panel")!;
+    const surface = getComputedStyle(panel).backgroundColor;
+    return ["h1", ".requirements", ".badge", "button:not(:disabled)"].map(selector => {
+      const element = document.querySelector(selector)!;
+      const style = getComputedStyle(element);
+      const background = selector === ".badge" || selector.startsWith("button") ? style.backgroundColor : surface;
+      return { selector, ratio: ratio(style.color, background) };
+    });
+  });
+  for (const item of contrasts) expect(item.ratio, item.selector).toBeGreaterThanOrEqual(4.5);
 });
