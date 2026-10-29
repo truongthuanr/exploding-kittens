@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRealtime } from "../lib/socket/provider";
 import type { RealtimeClient, RealtimeState } from "../lib/socket/client";
 import { selectLobbyActions, selectRoomView, type LobbyBlocker, type RoomView } from "../lib/socket/selectors";
@@ -35,22 +35,33 @@ function StatusMessages({ state, client }: { state: RealtimeState; client: Realt
   </>;
 }
 
+type AdmissionMode = "create" | "join";
+
 function Home({ state, client }: { state: RealtimeState; client: RealtimeClient | null }) {
+  const [mode, setMode] = useState<AdmissionMode>("create");
   const [nickname, setNickname] = useState("");
   const [roomCode, setRoomCode] = useState("");
-  const [validation, setValidation] = useState("");
+  const [errors, setErrors] = useState<{ nickname?: string; roomCode?: string }>({});
+  const nicknameRef = useRef<HTMLInputElement>(null);
+  const roomCodeRef = useRef<HTMLInputElement>(null);
   const errorAction = state.error && describeRealtimeError(state.error, state.session).action;
   const canRetryAdmission = !state.error || errorAction === "retry_admission";
   const canSubmit = state.connection === "connected" && !state.pendingAdmission &&
     state.session !== "joining" && !!client;
-  const submit = (event: FormEvent<HTMLFormElement>, kind: "create" | "join") => {
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canSubmit) return;
     const name = nickname.trim();
     const code = roomCode.trim();
-    if (!name) { setValidation("Nhập tên người chơi."); return; }
-    if (kind === "join" && !code) { setValidation("Nhập mã phòng."); return; }
-    setValidation("");
-    if (kind === "create") client?.createRoom(name);
+    const nextErrors = {
+      nickname: name ? undefined : "Nhập tên người chơi.",
+      roomCode: mode === "join" && !code ? "Nhập mã phòng." : undefined,
+    };
+    setErrors(nextErrors);
+    if (nextErrors.nickname) { nicknameRef.current?.focus(); return; }
+    if (nextErrors.roomCode) { roomCodeRef.current?.focus(); return; }
+    if (mode === "create") client?.createRoom(name);
     else client?.joinRoom(code, name);
   };
 
@@ -58,19 +69,30 @@ function Home({ state, client }: { state: RealtimeState; client: RealtimeClient 
     <h1>Chơi cùng bạn bè</h1>
     <p>Tạo phòng mới hoặc nhập mã phòng để tham gia.</p>
     {state.session === "invalid" && <p role="status">Phiên trước không còn hợp lệ. Bạn có thể tạo hoặc vào phòng mới.</p>}
-    <label htmlFor="nickname">Nickname</label>
-    <input id="nickname" autoComplete="nickname" value={nickname} onChange={event => setNickname(event.target.value)} />
-    <form onSubmit={event => submit(event, "create")}>
-      <button disabled={!canSubmit} type="submit">Create room</button>
+    <form noValidate onSubmit={submit}>
+      <fieldset className="mode-options" disabled={state.pendingAdmission || state.session === "joining"}>
+        <legend>Chọn cách tham gia</legend>
+        <label><input type="radio" name="admission-mode" value="create" checked={mode === "create"}
+          onChange={() => { setMode("create"); setErrors({}); }} /> Tạo phòng</label>
+        <label><input type="radio" name="admission-mode" value="join" checked={mode === "join"}
+          onChange={() => { setMode("join"); setErrors({}); }} /> Vào phòng</label>
+      </fieldset>
+      <label htmlFor="nickname">Nickname</label>
+      <input ref={nicknameRef} id="nickname" name="nickname" autoComplete="nickname"
+        value={nickname} aria-invalid={!!errors.nickname}
+        aria-describedby={errors.nickname ? "nickname-error" : undefined}
+        onChange={event => { setNickname(event.target.value); setErrors(previous => ({ ...previous, nickname: undefined })); }} />
+      {errors.nickname && <p id="nickname-error" className="field-error" role="alert">{errors.nickname}</p>}
+      {mode === "join" && <>
+        <label htmlFor="room-code-input">Room code</label>
+        <input ref={roomCodeRef} id="room-code-input" name="roomCode" autoCapitalize="characters"
+          value={roomCode} aria-invalid={!!errors.roomCode}
+          aria-describedby={errors.roomCode ? "room-code-error" : undefined}
+          onChange={event => { setRoomCode(event.target.value); setErrors(previous => ({ ...previous, roomCode: undefined })); }} />
+        {errors.roomCode && <p id="room-code-error" className="field-error" role="alert">{errors.roomCode}</p>}
+      </>}
+      <button disabled={!canSubmit} type="submit">{mode === "create" ? "Create room" : "Join room"}</button>
     </form>
-    <div className="divider">hoặc</div>
-    <form onSubmit={event => submit(event, "join")}>
-      <label htmlFor="room-code-input">Room code</label>
-      <input id="room-code-input" autoCapitalize="characters" value={roomCode}
-        onChange={event => setRoomCode(event.target.value)} />
-      <button disabled={!canSubmit} type="submit">Join room</button>
-    </form>
-    {validation && <p role="alert">{validation}</p>}
     {state.pendingAdmission && <div className="notice">
       <p>Yêu cầu tạo hoặc vào phòng đang chờ. Máy chủ có thể đã xử lý dù chưa nhận được phản hồi.</p>
       <div className="button-row">

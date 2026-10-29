@@ -101,7 +101,7 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 
 ### 2. Home
 
-- [ ] Build accessible Create Room and Join Room forms.
+- [x] Build accessible Create Room and Join Room forms.
 - [x] Validate and trim required inputs.
 - [x] Implement pending, retry, discard, timeout, and admission-error states.
 - [x] Open Lobby only after identity and room bootstrap are ready.

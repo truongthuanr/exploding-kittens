@@ -15,6 +15,7 @@ async function create(page: Page, name: string) {
 
 async function join(page: Page, name: string, code: string) {
   await connected(page);
+  await page.getByRole("radio", { name: "Vào phòng" }).check();
   await page.getByLabel("Nickname", { exact: true }).fill(name);
   await page.getByLabel("Room code", { exact: true }).fill(code);
   await page.getByRole("button", { name: "Join room", exact: true }).click();
@@ -79,4 +80,30 @@ test("saved session conflict requires an explicit decision", async ({ page }) =>
   await page.getByRole("button", { name: "Tiếp tục phiên đã lưu" }).click();
   await expect(page.getByTestId("room-code")).toHaveText(code);
   expect(await page.evaluate(() => sessionStorage.getItem("boardgame.pending.v1"))).toBeNull();
+});
+
+test("Home validates the selected form and submits with Enter", async ({ browser }) => {
+  const hostContext = await browser.newContext(), guestContext = await browser.newContext();
+  try {
+    const host = await hostContext.newPage(), guest = await guestContext.newPage();
+    await connected(host);
+    await host.getByLabel("Nickname", { exact: true }).focus();
+    await host.keyboard.press("Enter");
+    await expect(host.locator("#nickname")).toBeFocused();
+    await expect(host.locator("#nickname")).toHaveAttribute("aria-invalid", "true");
+    await expect(host.locator("#nickname-error")).toHaveText("Nhập tên người chơi.");
+    await host.getByLabel("Nickname", { exact: true }).fill("Keyboard host");
+    await host.getByLabel("Nickname", { exact: true }).press("Enter");
+    const code = await host.getByTestId("room-code").textContent();
+
+    await connected(guest);
+    await guest.getByRole("radio", { name: "Vào phòng" }).check();
+    await guest.getByLabel("Nickname", { exact: true }).fill("Keyboard guest");
+    await guest.getByLabel("Nickname", { exact: true }).press("Enter");
+    await expect(guest.locator("#room-code-input")).toBeFocused();
+    await expect(guest.locator("#room-code-input")).toHaveAttribute("aria-invalid", "true");
+    await guest.getByLabel("Room code", { exact: true }).fill(code!);
+    await guest.getByLabel("Room code", { exact: true }).press("Enter");
+    await expect(guest.getByTestId("room-code")).toHaveText(code!);
+  } finally { await hostContext.close(); await guestContext.close(); }
 });
