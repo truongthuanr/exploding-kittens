@@ -96,14 +96,14 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 - [x] Add pure selectors for active view, action availability, and start eligibility.
 - [x] Handle connection, restore, invalid-session, replaced-session, takeover, degraded-storage, and saved-identity / pending-admission conflict states.
 - [x] Add a client method to explicitly abandon a conflicting pending admission and restore the saved identity; keep room/private data hidden until restore succeeds.
-- [ ] Map backend error codes to concise user-facing messages.
+- [x] Map backend error codes to concise user-facing messages.
 - [x] Add accessible live status/error announcements.
 
 ### 2. Home
 
 - [ ] Build accessible Create Room and Join Room forms.
 - [x] Validate and trim required inputs.
-- [ ] Implement pending, retry, discard, timeout, and admission-error states.
+- [x] Implement pending, retry, discard, timeout, and admission-error states.
 - [x] Open Lobby only after identity and room bootstrap are ready.
 
 ### 3. Lobby

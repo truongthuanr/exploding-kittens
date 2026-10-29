@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useRealtime } from "../lib/socket/provider";
 import type { RealtimeClient, RealtimeState } from "../lib/socket/client";
 import { selectLobbyActions, selectRoomView, type LobbyBlocker, type RoomView } from "../lib/socket/selectors";
+import { describeRealtimeError } from "../lib/socket/error-messages";
 
 const reasons: Record<LobbyBlocker, string> = {
   connection_unavailable: "Chưa kết nối với máy chủ.",
@@ -21,10 +22,15 @@ const reasons: Record<LobbyBlocker, string> = {
   players_disconnected: "Tất cả người chơi cần kết nối.",
 };
 
-function StatusMessages({ state }: { state: RealtimeState }) {
+function StatusMessages({ state, client }: { state: RealtimeState; client: RealtimeClient | null }) {
+  const error = state.error && describeRealtimeError(state.error, state.session);
   return <>
     {state.connectionError && <p role="alert">Kết nối: {state.connectionError}</p>}
-    {state.error && <p role="alert">{state.error.message}{state.outcome === "unknown" && " Kết quả yêu cầu chưa xác định."}</p>}
+    {error && <div className="notice" role="alert">
+      <p>{error.message}</p>
+      {error.action === "retry_restore" && state.session === "ready" &&
+        <button type="button" disabled={!client} onClick={() => client?.retryRestore()}>Thử khôi phục phiên</button>}
+    </div>}
     {state.storageDegraded && <p role="status">Không lưu được phiên đầy đủ; tải lại trang có thể mất khả năng khôi phục.</p>}
   </>;
 }
@@ -33,6 +39,8 @@ function Home({ state, client }: { state: RealtimeState; client: RealtimeClient 
   const [nickname, setNickname] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [validation, setValidation] = useState("");
+  const errorAction = state.error && describeRealtimeError(state.error, state.session).action;
+  const canRetryAdmission = !state.error || errorAction === "retry_admission";
   const canSubmit = state.connection === "connected" && !state.pendingAdmission &&
     state.session !== "joining" && !!client;
   const submit = (event: FormEvent<HTMLFormElement>, kind: "create" | "join") => {
@@ -66,7 +74,7 @@ function Home({ state, client }: { state: RealtimeState; client: RealtimeClient 
     {state.pendingAdmission && <div className="notice">
       <p>Yêu cầu tạo hoặc vào phòng đang chờ. Máy chủ có thể đã xử lý dù chưa nhận được phản hồi.</p>
       <div className="button-row">
-        <button type="button" disabled={!client || state.connection !== "connected" || state.session === "joining"}
+        <button type="button" disabled={!client || state.connection !== "connected" || state.session === "joining" || !canRetryAdmission}
           onClick={() => client?.retryAdmission()}>Retry admission</button>
         <button type="button" className="secondary" disabled={!client || state.session === "joining"}
           onClick={() => client?.discardAdmission()}>Bỏ yêu cầu đang chờ</button>
@@ -171,6 +179,6 @@ export default function Page() {
       view === "game" ? <section className="panel"><h1>Trận đấu đã bắt đầu</h1><p>Giao diện bàn chơi sẽ được bổ sung ở bước tiếp theo.</p></section> :
       view === "finished" ? <section className="panel"><h1>Trận đấu đã kết thúc</h1><p>Giao diện kết quả sẽ được bổ sung ở bước tiếp theo.</p></section> :
       <Recovery view={view} state={state} client={client} />}
-    <StatusMessages state={state} />
+    <StatusMessages state={state} client={client} />
   </main>;
 }
