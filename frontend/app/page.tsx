@@ -66,7 +66,7 @@ function Home({ state, client }: { state: RealtimeState; client: RealtimeClient 
   };
 
   return <section className="panel">
-    <h1>Chơi cùng bạn bè</h1>
+    <h1 tabIndex={-1}>Chơi cùng bạn bè</h1>
     <p>Tạo phòng mới hoặc nhập mã phòng để tham gia.</p>
     {state.session === "invalid" && <p role="status">Phiên trước không còn hợp lệ. Bạn có thể tạo hoặc vào phòng mới.</p>}
     <form noValidate onSubmit={submit}>
@@ -116,7 +116,7 @@ function Recovery({ view, state, client }: { view: RoomView; state: RealtimeStat
   };
   const [title, message] = copy[view] ?? copy.safe_recovery;
   return <section className="panel">
-    <h1>{title}</h1><p role="status">{message}</p>
+    <h1 tabIndex={-1}>{title}</h1><p role="status">{message}</p>
     {view === "admission_conflict" && <>
       <p className="helper">Tiếp tục phiên đã lưu sẽ bỏ yêu cầu đang chờ. Nếu máy chủ đã xử lý yêu cầu đó, một người chơi có thể vẫn còn trong phòng nhưng bị ngắt kết nối.</p>
       <button disabled={!client} onClick={() => client?.continueSavedSession()}>Tiếp tục phiên đã lưu</button>
@@ -157,7 +157,7 @@ function Lobby({ state, client, readOnly }: { state: RealtimeState; client: Real
 
   return <section className="panel">
     <div className="room-heading">
-      <div><p className="eyebrow">Phòng chờ</p><h1>Room <span data-testid="room-code">{room.roomCode}</span></h1></div>
+      <div><p className="eyebrow">Phòng chờ</p><h1 tabIndex={-1}>Room <span data-testid="room-code">{room.roomCode}</span></h1></div>
       <p>{room.players.length} / 5 người chơi</p>
     </div>
     {readOnly && <div className="notice" role="status">
@@ -189,6 +189,13 @@ function Lobby({ state, client, readOnly }: { state: RealtimeState; client: Real
 export default function Page() {
   const { state, client } = useRealtime();
   const view = selectRoomView(state);
+  const previousView = useRef(view);
+  useEffect(() => {
+    if (previousView.current !== view) {
+      document.querySelector<HTMLElement>(".panel h1")?.focus();
+      previousView.current = view;
+    }
+  }, [view]);
   return <main className="page">
     <header className="site-header">
       <span className="brand">Exploding Kittens Lite</span>
@@ -197,9 +204,9 @@ export default function Page() {
     <span className="sr-only" data-testid="session">{state.session}</span>
     {view === "home" || view === "admission_home" ? <Home state={state} client={client} /> :
       view === "lobby" || view === "read_only_lobby" ? <Lobby state={state} client={client} readOnly={view === "read_only_lobby"} /> :
-      view === "game_loading" ? <section className="panel"><h1>Đang tải trận đấu</h1><p role="status">Đang đồng bộ trạng thái trận đấu.</p></section> :
-      view === "game" ? <section className="panel"><h1>Trận đấu đã bắt đầu</h1><p>Giao diện bàn chơi sẽ được bổ sung ở bước tiếp theo.</p></section> :
-      view === "finished" ? <section className="panel"><h1>Trận đấu đã kết thúc</h1><p>Giao diện kết quả sẽ được bổ sung ở bước tiếp theo.</p></section> :
+      view === "game_loading" ? <section className="panel"><h1 tabIndex={-1}>Đang tải trận đấu</h1><p role="status">Đang đồng bộ trạng thái trận đấu.</p></section> :
+      view === "game" ? <section className="panel"><h1 tabIndex={-1}>Trận đấu đã bắt đầu</h1><p>Giao diện bàn chơi sẽ được bổ sung ở bước tiếp theo.</p></section> :
+      view === "finished" ? <section className="panel"><h1 tabIndex={-1}>Trận đấu đã kết thúc</h1><p>Giao diện kết quả sẽ được bổ sung ở bước tiếp theo.</p></section> :
       <Recovery view={view} state={state} client={client} />}
     <StatusMessages state={state} client={client} />
   </main>;

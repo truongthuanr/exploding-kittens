@@ -83,10 +83,10 @@ Build the user-facing Home and Lobby flow so players can create or join a room, 
 - [x] Design mobile and desktop layouts.
 - [x] Define the component inventory and UI states.
 - [x] Define basic visual tokens for color, typography, spacing, radius, and status badges.
-- [ ] Design default, focus, disabled, loading, success, and error states for controls.
-- [ ] Verify that every realtime and session state has a corresponding UI state.
-- [ ] Review keyboard navigation, focus order, announcements, contrast, and non-color status indicators.
-- [ ] Approve the wireframes and state matrix before implementation begins.
+- [x] Design default, focus, disabled, loading, success, and error states for controls.
+- [x] Verify that every realtime and session state has a corresponding UI state.
+- [x] Review keyboard navigation, focus order, announcements, contrast, and non-color status indicators.
+- [ ] Approve the wireframes and state matrix before implementation begins. Approval remains with the project owner; implementation has already begun, so this is now a retrospective review.
 
 ## Implementation checklist
 

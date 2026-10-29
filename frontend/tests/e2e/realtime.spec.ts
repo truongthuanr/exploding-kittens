@@ -10,6 +10,7 @@ async function create(page: Page, name: string) {
   await page.getByLabel("Nickname", { exact: true }).fill(name);
   await page.getByRole("button", { name: "Create room", exact: true }).click();
   await expect(page.getByRole("heading", { name: /Room [A-Z0-9]+/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Room [A-Z0-9]+/ })).toBeFocused();
   return (await page.getByTestId("room-code").textContent())!;
 }
 
@@ -62,6 +63,7 @@ test("new tab requires explicit takeover and old tab shows recovery", async ({ c
   const other = await context.newPage();
   await other.goto("/");
   await expect(other.getByRole("heading", { name: "Phiên đang hoạt động ở tab khác" })).toBeVisible();
+  await expect(other.getByRole("heading", { name: "Phiên đang hoạt động ở tab khác" })).toBeFocused();
   await other.getByRole("button", { name: "Tiếp tục ở tab này" }).click();
   await expect(other.getByTestId("room-code")).toHaveText(code);
   await expect(page.getByRole("heading", { name: "Phiên đang hoạt động ở tab khác" })).toBeVisible();

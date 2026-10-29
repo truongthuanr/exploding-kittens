@@ -69,27 +69,22 @@ Admission failures remain on Home and provide an error plus retry/discard action
 
 ```text
 ┌──────────────────────────────────────────┐
-│ Exploding Kittens Lite     Connection ●  │
+│ Exploding Kittens Lite   Kết nối: ...    │
 │                                          │
-│ Play with friends                       │
-│ Nickname                                │
+│ Chơi cùng bạn bè                         │
+│ Tạo phòng mới hoặc nhập mã để tham gia.  │
+│                                          │
+│ Chọn cách tham gia                       │
+│ (●) Tạo phòng    ( ) Vào phòng           │
+│ Nickname                                 │
 │ [                                      ] │
+│ [ Create room ]                          │
 │                                          │
-│ [ Create room ]                         │
-│                                          │
-│ ─────────────── or ───────────────────  │
-│ Room code                               │
-│ [                                      ] │
-│ [ Join room   ]                         │
-│                                          │
-│ Status, validation, or recovery panel   │
+│ Trạng thái, lỗi hoặc hành động khôi phục │
 └──────────────────────────────────────────┘
 ```
 
-- Nickname is shared by Create and Join.
-- The primary action is clear for the selected form context.
-- Pending admission locks both admission actions.
-- Errors appear next to the affected flow and are announced through a live region.
+When **Vào phòng** is selected, the Room code input appears between Nickname and the submit button, which changes to **Join room**. The nickname is shared by both choices. Pending admission locks the choices and submit button; the pending message offers retry or discard when applicable. Field errors appear below their inputs and are announced.
 
 ## Lobby wireframe
 
@@ -117,16 +112,16 @@ Admission failures remain on Home and provide an error plus retry/discard action
 
 ```text
 ┌──────────────────────────────────────────┐
-│ Session recovery                        │
+│ Kết nối: ...                             │
 │                                          │
-│ This player session is active elsewhere.│
-│ Continuing here will replace that tab.  │
+│ Phiên đang hoạt động ở tab khác          │
+│ Tiếp tục tại tab này sẽ thay thế tab cũ. │
 │                                          │
-│ [ Continue in this tab ]  [ Retry ]      │
+│ [ Tiếp tục ở tab này ]                   │
 └──────────────────────────────────────────┘
 ```
 
-Messages and available actions vary for restoring, restore failure, invalid session, replaced session, and the saved-session / pending-admission conflict. Stale lobby or private data is never rendered behind this view.
+The title, message, and action vary for restoring, restore failure, replaced session, and saved-session / pending-admission conflict. The conflict view offers **Tiếp tục phiên đã lưu**; restore failure offers **Thử khôi phục lại**. Stale lobby or private data is never rendered behind a blocking recovery view.
 
 ## Game loading and boundaries
 
@@ -163,6 +158,35 @@ Messages and available actions vary for restoring, restore failure, invalid sess
 - Session: none, restoring, restore failed, ready, invalid, and replaced.
 - Lobby actions: available, unavailable with reason, and pending.
 - Connection: connecting, connected, reconnecting, and disconnected.
+
+## Control states and realtime coverage
+
+| Control | Default and success | Focus and disabled | Loading and error |
+| --- | --- | --- | --- |
+| Create / Join | Submit the selected form; success opens Lobby from a validated bootstrap. | Visible focus ring; unavailable while disconnected or admission is pending. | Pending request keeps Home visible with an explanation and retry/discard actions. Validation focuses the affected input; server errors use an alert. |
+| Ready / Unready | Label reflects the current room snapshot; success appears in every player's row. | Visible focus ring; unavailable while offline, synchronizing, or another lobby action is pending. | Pending update locks repeat submission and explains the wait; server error releases the lock and appears in an alert. |
+| Start game | Host sees Start; success moves through Game loading to Game. | Visible focus ring; non-host has no Start control; unmet conditions disable it with text reasons. | Pending start locks lobby actions; a backend error releases them and appears in an alert. |
+| Retry / takeover | Retry repeats a recoverable request; takeover explicitly moves session ownership. | Visible focus ring; unavailable while the required client or connection is absent. | Recovery view explains the wait or failure; room/private data stays hidden until bootstrap succeeds. |
+
+| Realtime or session state | UI representation |
+| --- | --- |
+| Connecting, disconnected, reconnecting | Header connection status; disconnected waiting room is read-only with retry action. |
+| No identity, joining, join failed | Home with selected form, pending explanation, retry/discard, and error alert where relevant. |
+| Invalid saved identity | Home with an invalid-session explanation and a fresh admission form. |
+| Saved identity plus pending admission | Blocking conflict view with an explicit Continue saved session action. |
+| Restoring, restore failed, replaced | Recovery heading and status; retry or explicit takeover when applicable. |
+| Ready waiting room, including syncing | Lobby from room snapshot; syncing and pending actions disable controls. |
+| Ready in-game or finished room without a current game pair | Game loading with synchronization status. |
+| Ready game pair, current finished pair | Game or Finished boundary respectively. |
+| Unusable room snapshot or unsupported state | Safe recovery view with retry; no stale room or private data. |
+| Action error, connection error, degraded storage | Alert or status message in the selected view. |
+
+## Accessibility review
+
+- Tab order follows the visible controls: admission mode, nickname, room code when joining, submit; Lobby Ready then Start for the host; Recovery action. Enter submits Home. Validation focuses the first invalid field. A view change focuses its heading so keyboard users do not remain on a removed control.
+- Inputs have visible labels and field errors have `aria-describedby` plus alert semantics. Connection, synchronization, recovery, and storage messages use status regions; action errors use alerts.
+- Focus rings are visible. Disabled actions have text explanations. Host, readiness, and connection use explicit words, so color is not the only signal.
+- Browser checks cover no horizontal overflow at 320, 375, and 1280 px and at least 4.5:1 contrast for representative heading, helper text, badges, and enabled button text. The current wireframe is an MVP; no full accessibility audit is claimed.
 
 ## Visual tokens
 
