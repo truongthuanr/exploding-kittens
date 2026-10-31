@@ -248,7 +248,6 @@ def setup_started_game(monkeypatch) -> tuple[StubRoomService, StubSessionService
     game_registry = GameRegistry()
     game_registry.add(runtime)
 
-    server.processed_request_ids.clear()
     server.room_action_locks.clear()
     monkeypatch.setattr(server, "room_service", room_service)
     monkeypatch.setattr(server, "session_service", session_service)
@@ -318,6 +317,9 @@ def test_game_start_by_host_stores_runtime_state(monkeypatch) -> None:
         "room-1",
     )
     assert emitted[2][1]["recentAction"]["actionType"] == "start_game"
+    assert emitted[2][1]["actionHistory"] == [{
+        **emitted[2][1]["recentAction"], "stateVersion": emitted[2][1]["stateVersion"],
+    }]
     assert emitted[3][2] == "sid-host"
     assert emitted[4][2] == "sid-guest"
     assert emitted[5][2] == "sid-third"
@@ -1058,7 +1060,7 @@ def test_reconnect_snapshot_excludes_other_players_secrets(monkeypatch):
     # An allowlist catches new accidental public fields, including nested hand data.
     assert set(public) == {
         "roomId", "phase", "currentPlayerId", "pendingDraws", "turnNumber", "players",
-        "discardTopCardType", "discardCount", "winnerPlayerId", "recentAction", "stateVersion",
+        "discardTopCardType", "discardCount", "winnerPlayerId", "recentAction", "actionHistory", "stateVersion",
     }
     assert all(set(player) == {"playerId", "nickname", "handCount", "status"}
                for player in public["players"])
@@ -1080,3 +1082,126 @@ def test_reconnect_snapshot_excludes_other_players_secrets(monkeypatch):
     hidden_ids += [c.card_id for pid, state in runtime.player_private_states.items()
                    if pid != "player-1" for c in state.hand]
     assert all(card_id not in serialized for card_id in hidden_ids)
+
+
+
+def test_action_ack_and_history_survive_bootstrap_and_duplicate(monkeypatch) -> None:
+    _room_service, session_service, _game_registry, runtime = setup_started_game(monkeypatch)
+    favor_card = card("favor-ack", CardType.FAVOR)
+    transferred = card("secret-transfer", CardType.ATTACK)
+    set_player_hand(runtime, "player-1", [favor_card])
+    set_player_hand(runtime, "player-2", [transferred])
+    monkeypatch.setattr(server.turn_service, "randomizer", FixedRandom(0))
+    emitted: list[tuple[str, dict, str]] = []
+
+    async def fake_emit(event: str, data: dict, **kwargs) -> None:
+        emitted.append((event, data, kwargs.get("room") or kwargs["to"]))
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+
+    async def run() -> tuple[dict | None, dict | None, dict | None]:
+        payload = {"requestId": "favor-ack-1", "cardId": favor_card.card_id, "targetPlayerId": "player-2"}
+        first = await server.handle_turn_play_card("sid-host", payload)
+        duplicate = await server.handle_turn_play_card("sid-host", payload)
+        conflict = await server.handle_turn_play_card(
+            "sid-host", {**payload, "targetPlayerId": "player-3"}
+        )
+        return first, duplicate, conflict
+
+    first, duplicate, conflict = asyncio.run(run())
+    assert first == {"requestId": "favor-ack-1", "stateVersion": runtime.state_version}
+    assert duplicate == first
+    assert conflict is None
+    assert runtime.game_state.discard_pile == [favor_card]
+    assert runtime.player_private_states["player-2"].hand == []
+    assert len(runtime.action_history) == 1
+    assert emitted[-1][0] == "error"
+    assert emitted[-1][1]["code"] == "request_conflict"
+    assert emitted[-1][1]["requestId"] == "favor-ack-1"
+
+    public = next(data for event, data, _ in emitted if event == "game:state")
+    assert public["actionHistory"] == [{
+        "actorPlayerId": "player-1",
+        "actionType": "play_favor",
+        "targetPlayerId": "player-2",
+        "summary": "alice played Favor on bob",
+        "stateVersion": first["stateVersion"],
+    }]
+    assert "secret-transfer" not in str(public)
+    assert "attack" not in str(public)
+    bootstrap = server.bootstrap(session_service.get_session_by_player("room-1", "player-1"))
+    assert bootstrap["game"]["actionHistory"] == public["actionHistory"]
+    assert bootstrap["game"]["recentAction"] == public["recentAction"]
+
+
+def test_draw_ack_records_only_final_auto_defuse_outcome(monkeypatch) -> None:
+    _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
+    runtime.game_state.draw_pile = [card("bomb-ack", CardType.EXPLODING_KITTEN)]
+    set_player_hand(runtime, "player-1", [card("defuse-ack", CardType.DEFUSE)])
+    emitted: list[tuple[str, dict, str]] = []
+
+    async def fake_emit(event: str, data: dict, **kwargs) -> None:
+        emitted.append((event, data, kwargs.get("room") or kwargs["to"]))
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+
+    async def run() -> tuple[dict | None, dict | None, dict | None]:
+        first = await server.handle_turn_draw_card("sid-host", {"requestId": "draw-ack-1"})
+        duplicate = await server.handle_turn_draw_card("sid-host", {"requestId": "draw-ack-1"})
+        conflict = await server.handle_turn_play_card(
+            "sid-host", {"requestId": "draw-ack-1", "cardId": "anything"}
+        )
+        return first, duplicate, conflict
+
+    first, duplicate, conflict = asyncio.run(run())
+    assert first == {"requestId": "draw-ack-1", "stateVersion": runtime.state_version}
+    assert duplicate == first
+    assert conflict is None
+    assert len(runtime.action_history) == 1
+    assert runtime.action_history[0].action_type.value == "defuse"
+    assert runtime.action_history[0].state_version == first["stateVersion"]
+    assert emitted[-1][1]["code"] == "request_conflict"
+
+
+def test_public_action_history_keeps_latest_50_versions(monkeypatch) -> None:
+    _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
+    from app.realtime.game_events import build_recent_action, record_public_action, to_public_game_state
+
+    for version in range(1, 56):
+        runtime.state_version = version
+        record_public_action(runtime, build_recent_action(
+            actor_player_id="player-1",
+            action_type=server.ActionType.DRAW_CARD,
+            summary=f"Action {version}",
+        ))
+
+    public = to_public_game_state(runtime).model_dump(mode="json")
+    assert [entry["stateVersion"] for entry in public["actionHistory"]] == list(range(6, 56))
+    assert public["recentAction"]["summary"] == "Action 55"
+    assert public["actionHistory"][-1]["summary"] == "Action 55"
+
+
+
+def test_duplicate_draw_remains_idempotent_after_many_other_requests(monkeypatch) -> None:
+    _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
+    runtime.game_state.pending_draws = 2
+    runtime.game_state.draw_pile = [
+        card("first-draw", CardType.SKIP), card("second-draw", CardType.ATTACK),
+    ]
+
+    async def fake_emit(event: str, data: dict, **kwargs) -> None:
+        pass
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+
+    async def run() -> tuple[dict | None, dict | None]:
+        first = await server.handle_turn_draw_card("sid-host", {"requestId": "old-draw"})
+        for index in range(501):
+            server.mark_processed_request("room-1", "player-1", f"other-{index}", ("draw",), index)
+        duplicate = await server.handle_turn_draw_card("sid-host", {"requestId": "old-draw"})
+        return first, duplicate
+
+    first, duplicate = asyncio.run(run())
+    assert duplicate == first
+    assert [card.card_id for card in runtime.game_state.draw_pile] == ["second-draw"]
+    assert len(runtime.action_history) == 1

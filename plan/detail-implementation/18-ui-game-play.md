@@ -45,13 +45,14 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 - [ ] For Favor, let the player select an eligible living opponent with at least one card, review/cancel the choice, and send `targetPlayerId` with the selected `cardId`.
 - [ ] Add a draw control that sends `turn:draw-card` only when allowed; explain pending draws, turn ownership, and disabled states in the UI.
 - [ ] Reflect action results only after the authoritative public/private snapshot arrives, including Attack/Skip turn changes, Favor hand changes, automatic Defuse, explosion, and elimination.
-- [ ] Add a typed success acknowledgement for `turn:play-card` and `turn:draw-card` with `requestId` and resulting `stateVersion`; return/expose the request ID and pending status through the realtime client. A duplicate request ID must acknowledge without applying the action again. Keep correlated error handling for failures.
+- [x] Add a typed success acknowledgement for `turn:play-card` and `turn:draw-card` with `requestId` and resulting `stateVersion`; a duplicate request ID acknowledges without applying the action again, and failures keep correlated `error` events.
+- [ ] Return/expose the request ID and pending status through the frontend realtime client and consume the success acknowledgement.
 - [ ] On acknowledgement timeout or disconnect, show that the outcome is unknown and offer restore/reconciliation. Do not automatically resend the action or create a new request ID for an uncertain action.
 - [ ] Surface server action errors near the controls and allow a new valid action after the failed request is resolved. Do not optimistically change cards, turn ownership, or pending draws.
 
 ### 4. Public game log
-- [ ] Add `actionHistory` to the shared TypeScript contract and matching backend response model as the latest 50 public entries, ordered by `stateVersion`; include it in normal game state and reconnect/bootstrap snapshots.
-- [ ] Append one entry after each successful start/play/draw resolution and before broadcasting its state. Use `stateVersion` as the entry ID, retain `recentAction` as the latest entry, and reset history for a new match.
+- [x] Add `actionHistory` to the shared TypeScript contract and matching backend response model as the latest 50 public entries, ordered by `stateVersion`; include it in normal game state and reconnect/bootstrap snapshots.
+- [x] Append one entry after each successful start/play/draw resolution and before broadcasting its state. Use `stateVersion` as the entry ID, retain `recentAction` as the latest entry, and reset history for a new match.
 - [ ] Keep private cards, deck order, and Favor's transferred card type out of public summaries. Render player names and final outcomes, label the list as the 50 most recent actions, and show a sensible empty state.
 
 ### 5. Elimination and result
@@ -65,7 +66,7 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 - [ ] E2E-test a 3-player browser match from lobby through winner/result, including representative play/draw actions, action pending/error recovery, and the bounded log UI.
 - [ ] Cover every action type, Attack pending draws, automatic Defuse, elimination, and log outcomes with deterministic backend tests using a controlled deck/randomizer; do not make browser tests depend on random draws.
 - [ ] E2E-test reload/reconnect during a match and after finish; verify correct private hand, public log history, action lock while restoring, and no hidden-information leak to other players.
-- [ ] Test lost/delayed success acknowledgement, duplicate request ID, correlated action error, and restore after an unknown action outcome without a second action resolution.
+- [ ] Test lost/delayed success acknowledgement, correlated action error, and restore after an unknown action outcome without a second action resolution. Backend duplicate/conflict and action-history tests are complete.
 - [ ] Run `npm test`, `npm run typecheck`, `npm run build`, and `npm run test:e2e` from `frontend/`; run relevant backend tests for the action-history contract change.
 
 ## Done when

@@ -56,6 +56,15 @@ export type RecentAction = {
   summary: string;
 };
 
+export type ActionHistoryEntry = RecentAction & {
+  stateVersion: number;
+};
+
+export type GameActionAck = {
+  requestId: string;
+  stateVersion: number;
+};
+
 export type PublicGameStateEvent = {
   stateVersion: number;
   roomId: string;
@@ -68,6 +77,7 @@ export type PublicGameStateEvent = {
   discardCount: number;
   winnerPlayerId: string | null;
   recentAction: RecentAction | null;
+  actionHistory: ActionHistoryEntry[];
 };
 
 export type PrivateCardView = {

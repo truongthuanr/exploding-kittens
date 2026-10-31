@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import socketio
 
-from app.modules.game.models import GameRuntimeState, PlayerPrivateState
+from app.modules.game.models import GameRuntimeState, PlayerPrivateState, PublicActionRecord
 from app.modules.room import RoomService, to_room_updated_event
 from app.modules.session import SessionService
 from app.schemas.enums import ActionType, RoomStatus
 from app.schemas.responses import (
+    ActionHistoryEntry,
     GameEndedEvent,
     PlayerEliminatedEvent,
     PlayerPrivateStateEvent,
@@ -32,6 +33,22 @@ def build_recent_action(
     )
 
 
+MAX_ACTION_HISTORY = 50
+
+
+def record_public_action(runtime: GameRuntimeState, action: RecentAction) -> None:
+    runtime.action_history.append(
+        PublicActionRecord(
+            state_version=runtime.state_version,
+            actor_player_id=action.actorPlayerId,
+            action_type=action.actionType,
+            summary=action.summary,
+            target_player_id=action.targetPlayerId,
+        )
+    )
+    del runtime.action_history[:-MAX_ACTION_HISTORY]
+
+
 def to_public_game_state(
     runtime: GameRuntimeState,
     recent_action: RecentAction | None = None,
@@ -40,6 +57,25 @@ def to_public_game_state(
     discard_top_card_type = None
     if state.discard_pile:
         discard_top_card_type = state.discard_pile[-1].card_type
+
+    history = [
+        ActionHistoryEntry(
+            stateVersion=entry.state_version,
+            actorPlayerId=entry.actor_player_id,
+            actionType=entry.action_type,
+            targetPlayerId=entry.target_player_id,
+            summary=entry.summary,
+        )
+        for entry in runtime.action_history
+    ]
+    if recent_action is None and history:
+        latest = history[-1]
+        recent_action = RecentAction(
+            actorPlayerId=latest.actorPlayerId,
+            actionType=latest.actionType,
+            targetPlayerId=latest.targetPlayerId,
+            summary=latest.summary,
+        )
 
     return PublicGameStateEvent(
         stateVersion=runtime.state_version,
@@ -61,6 +97,7 @@ def to_public_game_state(
         discardCount=len(state.discard_pile),
         winnerPlayerId=state.winner_player_id,
         recentAction=recent_action,
+        actionHistory=history,
     )
 
 

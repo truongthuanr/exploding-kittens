@@ -1,5 +1,4 @@
 import asyncio
-from collections import OrderedDict
 from time import time
 from uuid import uuid4
 
@@ -29,7 +28,6 @@ def restore(result, instance="tab-a", takeover=False):
 def gateway(monkeypatch):
     monkeypatch.setattr(server, "gateway_lock", asyncio.Lock())
     monkeypatch.setattr(server, "room_action_locks", {})
-    monkeypatch.setattr(server, "processed_request_ids", OrderedDict())
     monkeypatch.setattr(server, "room_service", RoomService(RoomRegistry()))
     monkeypatch.setattr(server, "session_service", SessionService(SessionRegistry()))
     monkeypatch.setattr(server, "game_registry", GameRegistry())

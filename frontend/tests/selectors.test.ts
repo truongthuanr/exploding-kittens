@@ -25,7 +25,7 @@ function inGame(roomVersion = 2, pairVersion = roomVersion): RealtimeState {
   const game: PublicGameStateEvent = {
     roomId: "room", stateVersion: pairVersion, phase: "turn_action", currentPlayerId: "self",
     pendingDraws: 1, turnNumber: 1, players: [], discardTopCardType: null,
-    discardCount: 0, winnerPlayerId: null, recentAction: null,
+    discardCount: 0, winnerPlayerId: null, recentAction: null, actionHistory: [],
   };
   const privateState: PlayerPrivateStateEvent = {
     playerId: "self", stateVersion: pairVersion, hand: [], visibleFutureCards: null,

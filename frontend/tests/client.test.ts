@@ -26,7 +26,7 @@ function bootstrap(version = 1, game = false): BootstrapResponse {
     room: { roomId: "room", roomCode: "ROOM01", stateVersion: version, status: game ? "in_game" : "waiting",
       players: [{ playerId: "player", nickname: "Alice", isReady: true, isHost: true, status: "connected" }] },
     game: game ? { roomId: "room", stateVersion: version, phase: "turn_action", currentPlayerId: "player", pendingDraws: 1, turnNumber: 1,
-      players: [{ playerId: "player", nickname: "Alice", handCount: 1, status: "connected" }], discardTopCardType: null, discardCount: 0, winnerPlayerId: null, recentAction: null } : null,
+      players: [{ playerId: "player", nickname: "Alice", handCount: 1, status: "connected" }], discardTopCardType: null, discardCount: 0, winnerPlayerId: null, recentAction: null, actionHistory: [] } : null,
     private: game ? { stateVersion: version, playerId: "player", hand: [{ cardId: "card", cardType: "skip" }], visibleFutureCards: null } : null,
   };
 }

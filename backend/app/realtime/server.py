@@ -1,7 +1,6 @@
 import asyncio
 from functools import wraps
 from time import time
-from collections import OrderedDict
 
 import socketio
 from fastapi import FastAPI
@@ -52,11 +51,12 @@ from app.modules.room.errors import (
 from app.modules.session import SessionNotFoundError, SessionService, SessionRegistry
 from app.modules.session.models import PlayerSession
 from app.realtime.admission import AdmissionCache, AdmissionError, EPOCH, TTL_MS
-from app.schemas.responses import BootstrapResponse
+from app.schemas.responses import BootstrapResponse, GameActionAck
 from app.realtime.game_events import (
     to_public_game_state,
     to_player_private_state,
     build_recent_action,
+    record_public_action,
     emit_game_ended,
     emit_game_state,
     emit_player_eliminated,
@@ -92,9 +92,6 @@ game_setup_service = GameSetupService()
 game_registry = GameRegistry()
 turn_service = TurnLifecycleService(registry=game_registry)
 room_action_locks: dict[str, asyncio.Lock] = {}
-processed_request_ids: OrderedDict[tuple[str, str, str], None] = OrderedDict()
-MAX_PROCESSED_REQUEST_IDS = 500
-
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=settings.cors_origins,
@@ -262,30 +259,26 @@ def get_active_turn_service() -> TurnLifecycleService:
     return turn_service
 
 
-def get_processed_request_key(
-    room_id: str,
-    player_id: str,
-    request_id: str | None,
-) -> tuple[str, str, str] | None:
-    if request_id is None:
+def get_processed_request(
+    room_id: str, player_id: str, request_id: str | None,
+) -> tuple[tuple[str, ...], int] | None:
+    runtime = game_registry.get(room_id)
+    if runtime is None or request_id is None:
         return None
-    return (room_id, player_id, request_id)
+    return runtime.processed_actions.get((player_id, request_id))
 
 
 def is_processed_request(room_id: str, player_id: str, request_id: str | None) -> bool:
-    key = get_processed_request_key(room_id, player_id, request_id)
-    return key is not None and key in processed_request_ids
+    return get_processed_request(room_id, player_id, request_id) is not None
 
 
-def mark_processed_request(room_id: str, player_id: str, request_id: str | None) -> None:
-    key = get_processed_request_key(room_id, player_id, request_id)
-    if key is None:
-        return
-
-    processed_request_ids[key] = None
-    processed_request_ids.move_to_end(key)
-    while len(processed_request_ids) > MAX_PROCESSED_REQUEST_IDS:
-        processed_request_ids.popitem(last=False)
+def mark_processed_request(
+    room_id: str, player_id: str, request_id: str | None,
+    signature: tuple[str, ...], state_version: int,
+) -> None:
+    runtime = game_registry.get(room_id)
+    if runtime is not None and request_id is not None:
+        runtime.processed_actions[(player_id, request_id)] = (signature, state_version)
 
 
 def get_player_nickname(runtime: GameRuntimeState, player_id: str) -> str:
@@ -379,6 +372,8 @@ async def emit_action_result(
     action_type: ActionType,
     eliminated_player_id: str | None = None,
     target_player_id: str | None = None,
+    request_id: str | None = None,
+    signature: tuple[str, ...] = (),
 ) -> None:
     runtime = result.runtime
     advance_version(runtime.game_state.room_id)
@@ -388,6 +383,8 @@ async def emit_action_result(
         summary=summary_for_action(runtime, result.player_id, action_type, target_player_id),
         target_player_id=target_player_id,
     )
+    record_public_action(runtime, recent_action)
+    mark_processed_request(runtime.game_state.room_id, result.player_id, request_id, signature, runtime.state_version)
     await emit_game_state(sio, runtime, recent_action)
     await emit_private_states(sio, session_service, runtime)
 
@@ -610,6 +607,7 @@ async def handle_game_start(sid: str, data: dict | None) -> None:
             action_type=ActionType.START_GAME,
             summary=summary_for_action(runtime, session.player_id, ActionType.START_GAME),
         )
+        record_public_action(runtime, recent_action)
         await emit_game_state(sio, runtime, recent_action)
         await emit_private_states(sio, session_service, runtime)
         await emit_turn_started(sio, runtime)
@@ -621,7 +619,7 @@ async def handle_game_start(sid: str, data: dict | None) -> None:
 
 @sio.on("turn:play-card")
 @serialized
-async def handle_turn_play_card(sid: str, data: dict | None) -> None:
+async def handle_turn_play_card(sid: str, data: dict | None) -> dict | None:
     payload = await validate_socket_payload(sid, "turn:play-card", data)
     if payload is None:
         return
@@ -630,6 +628,7 @@ async def handle_turn_play_card(sid: str, data: dict | None) -> None:
     session = await resolve_bound_session(sid, request_id)
     if session is None:
         return
+    signature = ("play", payload.cardId, payload.targetPlayerId or "")
 
     async with get_room_lock(session.room_id):
         runtime = game_registry.get(session.room_id)
@@ -637,9 +636,13 @@ async def handle_turn_play_card(sid: str, data: dict | None) -> None:
             await emit_service_error(sid, GameNotFoundError(session.room_id), request_id)
             return
 
-        if is_processed_request(session.room_id, session.player_id, request_id):
+        processed = get_processed_request(session.room_id, session.player_id, request_id)
+        if processed is not None:
+            if processed[0] != signature:
+                await emit_socket_error(sid, "request_conflict", "Request ID was used for another action", request_id)
+                return None
             await emit_requester_snapshot(sio, sid, runtime, session.player_id)
-            return
+            return GameActionAck(requestId=request_id, stateVersion=processed[1]).model_dump()
 
         try:
             card = find_card_in_private_hand(runtime, session.player_id, payload.cardId)
@@ -697,15 +700,18 @@ async def handle_turn_play_card(sid: str, data: dict | None) -> None:
                 before_turn,
                 action_type,
                 target_player_id=payload.targetPlayerId if card.card_type is CardType.FAVOR else None,
+                request_id=request_id,
+                signature=signature,
             )
-            mark_processed_request(session.room_id, session.player_id, request_id)
+            if request_id is not None:
+                return GameActionAck(requestId=request_id, stateVersion=runtime.state_version).model_dump()
         except SERVICE_ERROR_TYPES as error:
             await emit_service_error(sid, error, request_id)
 
 
 @sio.on("turn:draw-card")
 @serialized
-async def handle_turn_draw_card(sid: str, data: dict | None) -> None:
+async def handle_turn_draw_card(sid: str, data: dict | None) -> dict | None:
     payload = await validate_socket_payload(sid, "turn:draw-card", data)
     if payload is None:
         return
@@ -714,6 +720,7 @@ async def handle_turn_draw_card(sid: str, data: dict | None) -> None:
     session = await resolve_bound_session(sid, request_id)
     if session is None:
         return
+    signature = ("draw",)
 
     async with get_room_lock(session.room_id):
         runtime = game_registry.get(session.room_id)
@@ -721,9 +728,13 @@ async def handle_turn_draw_card(sid: str, data: dict | None) -> None:
             await emit_service_error(sid, GameNotFoundError(session.room_id), request_id)
             return
 
-        if is_processed_request(session.room_id, session.player_id, request_id):
+        processed = get_processed_request(session.room_id, session.player_id, request_id)
+        if processed is not None:
+            if processed[0] != signature:
+                await emit_socket_error(sid, "request_conflict", "Request ID was used for another action", request_id)
+                return None
             await emit_requester_snapshot(sio, sid, runtime, session.player_id)
-            return
+            return GameActionAck(requestId=request_id, stateVersion=processed[1]).model_dump()
 
         try:
             before_turn = (runtime.game_state.current_player_id, runtime.game_state.turn_number)
@@ -741,8 +752,12 @@ async def handle_turn_draw_card(sid: str, data: dict | None) -> None:
             is_eliminated = session.player_id in result.runtime.game_state.eliminated_player_ids
             eliminated_player_id = session.player_id if is_eliminated and not was_eliminated else None
             action_type = recent_action_for_result(result, eliminated_player_id)
-            await emit_action_result(result, before_turn, action_type, eliminated_player_id)
-            mark_processed_request(session.room_id, session.player_id, request_id)
+            await emit_action_result(
+                result, before_turn, action_type, eliminated_player_id,
+                request_id=request_id, signature=signature,
+            )
+            if request_id is not None:
+                return GameActionAck(requestId=request_id, stateVersion=runtime.state_version).model_dump()
         except SERVICE_ERROR_TYPES as error:
             await emit_service_error(sid, error, request_id)
 

@@ -65,6 +65,15 @@ class RecentAction(SocketResponseModel):
     summary: str
 
 
+class ActionHistoryEntry(RecentAction):
+    stateVersion: int
+
+
+class GameActionAck(SocketResponseModel):
+    requestId: str
+    stateVersion: int
+
+
 class PublicGameStateEvent(SocketResponseModel):
     stateVersion: int = 0
     roomId: str
@@ -77,6 +86,7 @@ class PublicGameStateEvent(SocketResponseModel):
     discardCount: int
     winnerPlayerId: str | None
     recentAction: RecentAction | None
+    actionHistory: list[ActionHistoryEntry]
 
 
 class PrivateCardView(SocketResponseModel):
