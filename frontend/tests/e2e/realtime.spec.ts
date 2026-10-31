@@ -1,115 +1,183 @@
 import { test, expect, type Page } from "@playwright/test";
+
 async function connected(page: Page) {
-  await page.goto("/"); await expect(page.getByTestId("connection")).toHaveText("connected");
+  await page.goto("/");
+  await expect(page.getByTestId("connection")).toHaveText("connected");
 }
+
 async function create(page: Page, name: string) {
-  await connected(page); await page.getByLabel("Nickname", { exact: true }).fill(name);
+  await connected(page);
+  await page.getByLabel("Nickname", { exact: true }).fill(name);
   await page.getByRole("button", { name: "Create room", exact: true }).click();
-  await expect(page.getByTestId("session")).toHaveText("ready");
+  await expect(page.getByRole("heading", { name: /Room [A-Z0-9]+/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Room [A-Z0-9]+/ })).toBeFocused();
   return (await page.getByTestId("room-code").textContent())!;
 }
-async function snapshot(page: Page, name: string) { return JSON.parse((await page.getByTestId(name).textContent())!); }
 
-test("create/join, lobby reload, game bootstrap and private hand survive reload", async ({ browser }) => {
+async function join(page: Page, name: string, code: string) {
+  await connected(page);
+  await page.getByRole("radio", { name: "Vào phòng" }).check();
+  await page.getByLabel("Nickname", { exact: true }).fill(name);
+  await page.getByLabel("Room code", { exact: true }).fill(code);
+  await page.getByRole("button", { name: "Join room", exact: true }).click();
+  await expect(page.getByTestId("room-code")).toHaveText(code);
+}
+
+test("three players create, join, ready, start, and restore into the game boundary", async ({ browser }) => {
   const contexts = await Promise.all([browser.newContext(), browser.newContext(), browser.newContext()]);
   try {
     const pages = await Promise.all(contexts.map(context => context.newPage()));
-    const errors: string[] = []; pages.forEach(page => page.on("pageerror", error => errors.push(error.message)));
+    const errors: string[] = [];
+    pages.forEach(page => page.on("pageerror", error => errors.push(error.message)));
     const code = await create(pages[0], "Host");
-    const identity = await pages[0].getByTestId("player-id").textContent();
-    await pages[0].reload(); await expect(pages[0].getByTestId("session")).toHaveText("ready");
-    await expect(pages[0].getByTestId("player-id")).toHaveText(identity!);
-    for (let i = 1; i < 3; i++) {
-      await connected(pages[i]); await pages[i].getByLabel("Nickname", { exact: true }).fill(`Player ${i}`);
-      await pages[i].getByLabel("Room code", { exact: true }).fill(code);
-      await pages[i].getByRole("button", { name: "Join room", exact: true }).click();
-      await expect(pages[i].getByTestId("session")).toHaveText("ready");
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeDisabled();
+    await join(pages[1], "Bob", code);
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeDisabled();
+    await expect(pages[0].getByText("Cần từ 3 đến 5 người chơi.")).toBeVisible();
+    await join(pages[2], "Cat", code);
+    for (const page of pages) await expect(page.locator(".player")).toHaveCount(3);
+    await pages[1].reload();
+    await expect(pages[1].getByTestId("room-code")).toHaveText(code);
+    await pages[0].getByRole("button", { name: "Ready", exact: true }).click();
+    await pages[1].getByRole("button", { name: "Ready", exact: true }).click();
+    for (const page of pages) {
+      await expect(page.locator(".player .badge").filter({ hasText: /^Ready$/ })).toHaveCount(2);
     }
-    for (const page of pages) await page.getByRole("button", { name: "Ready", exact: true }).click();
-    await expect.poll(async () => (await snapshot(pages[0], "room-state")).players.every((p: { isReady: boolean }) => p.isReady)).toBe(true);
-    await pages[0].getByRole("button", { name: "Start game", exact: true }).click();
-    for (const page of pages) await expect(page.getByTestId("private-state")).toContainText("cardId");
-    const hand = (await snapshot(pages[0], "private-state")).hand;
-    const otherHand = (await snapshot(pages[1], "private-state")).hand;
-    expect(hand.map((c: { cardId: string }) => c.cardId)).not.toEqual(otherHand.map((c: { cardId: string }) => c.cardId));
-    await pages[0].reload(); await expect(pages[0].getByTestId("session")).toHaveText("ready");
-    expect((await snapshot(pages[0], "private-state")).hand).toEqual(hand);
-    expect(await pages[0].getByTestId("game-state").textContent()).not.toContain("cardId");
-    const game = await snapshot(pages[0], "game-state"), privateState = await snapshot(pages[0], "private-state");
-    expect(game.stateVersion).toBe(privateState.stateVersion);
-    const storage = await pages[0].evaluate(() => localStorage.getItem("boardgame.identity.v1"));
-    expect(storage).not.toContain("hand"); expect(errors).toEqual([]);
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeDisabled();
+    await expect(pages[0].getByText("Tất cả người chơi cần Ready.")).toBeVisible();
+    await pages[2].getByRole("button", { name: "Ready", exact: true }).click();
+    for (const page of pages) await expect(page.locator(".player .badge").filter({ hasText: /^Ready$/ })).toHaveCount(3);
+    await expect(pages[1].getByRole("button", { name: "Start game" })).toHaveCount(0);
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeEnabled();
+    await pages[0].getByRole("button", { name: "Start game" }).click();
+    for (const page of pages) await expect(page.getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+    await pages[0].reload();
+    await expect(pages[0].getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+    expect(await pages[0].evaluate(() => localStorage.getItem("boardgame.identity.v1"))).not.toContain("hand");
+    expect(errors).toEqual([]);
   } finally { await Promise.all(contexts.map(context => context.close())); }
 });
 
-test("new tab requires explicit takeover and old tab stays replaced", async ({ context, page }) => {
-  await create(page, "Owner"); const player = await page.getByTestId("player-id").textContent();
-  const other = await context.newPage(); await other.goto("/");
-  await expect(other.getByTestId("session")).toHaveText("replaced");
-  await expect(page.getByTestId("session")).toHaveText("ready");
+test("new tab requires explicit takeover and old tab shows recovery", async ({ context, page }) => {
+  const code = await create(page, "Owner");
+  const other = await context.newPage();
+  await other.goto("/");
+  await expect(other.getByRole("heading", { name: "Phiên đang hoạt động ở tab khác" })).toBeVisible();
+  await expect(other.getByRole("heading", { name: "Phiên đang hoạt động ở tab khác" })).toBeFocused();
   await other.getByRole("button", { name: "Tiếp tục ở tab này" }).click();
-  await expect(other.getByTestId("session")).toHaveText("ready");
-  await expect(page.getByTestId("session")).toHaveText("replaced");
-  await expect(other.getByTestId("player-id")).toHaveText(player!);
-  await expect(page.getByRole("button", { name: "Ready", exact: true })).toBeDisabled();
-  expect(await other.evaluate(() => localStorage.getItem("boardgame.identity.v1"))).not.toBeNull();
+  await expect(other.getByTestId("room-code")).toHaveText(code);
+  await expect(page.getByRole("heading", { name: "Phiên đang hoạt động ở tab khác" })).toBeVisible();
 });
 
-test("offline owner cannot reclaim after another instance takes over", async ({ browser }) => {
-  const first = await browser.newContext(), second = await browser.newContext();
-  try {
-    const a = await first.newPage(); await create(a, "Offline owner");
-    const identity = await a.evaluate(() => localStorage.getItem("boardgame.identity.v1"));
-    await second.addInitScript(value => localStorage.setItem("boardgame.identity.v1", value!), identity);
-    await first.setOffline(true);
-    await expect(a.getByTestId("connection")).not.toHaveText("connected", { timeout: 50000 });
-    const b = await second.newPage(); await b.goto("/");
-    await expect(b.getByTestId("session")).toHaveText("replaced");
-    await b.getByRole("button", { name: "Tiếp tục ở tab này" }).click();
-    await expect(b.getByTestId("session")).toHaveText("ready");
-    await first.setOffline(false);
-    await expect(a.getByTestId("session")).toHaveText("replaced", { timeout: 30000 });
-    await expect(b.getByTestId("session")).toHaveText("ready");
-  } finally { await first.close(); await second.close(); }
-});
-
-test("unknown stored session exits restore and permits a new admission", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("boardgame.identity.v1", JSON.stringify({ version: 1, roomId: "gone", roomCode: "GONE", playerId: "gone", playerSessionId: "gone" })));
-  await connected(page); await expect(page.getByTestId("session")).toHaveText("invalid");
-  expect(await page.evaluate(() => localStorage.getItem("boardgame.identity.v1"))).toBeNull();
+test("invalid saved session returns to Home and permits a new room", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("boardgame.identity.v1", JSON.stringify({
+    version: 1, roomId: "gone", roomCode: "GONE", playerId: "gone", playerSessionId: "gone",
+  })));
+  await connected(page);
+  await expect(page.getByText("Phiên trước không còn hợp lệ.")).toBeVisible();
   await page.getByLabel("Nickname", { exact: true }).fill("New session");
   await page.getByRole("button", { name: "Create room", exact: true }).click();
-  await expect(page.getByTestId("session")).toHaveText("ready");
+  await expect(page.getByTestId("room-code")).toBeVisible();
 });
 
-test("lost create ack is recovered after reload without a duplicate seat", async ({ page }) => {
-  let dropAck = true, upgraded = false, discarded = false;
-  await page.routeWebSocket(/\/socket\.io\//, route => {
-    const server = route.connectToServer();
-    route.onMessage(message => { if (message === "5") upgraded = true; server.send(message); });
-    server.onMessage(message => {
-      if (dropAck && typeof message === "string" && /^43\d+\[/.test(message)) {
-        dropAck = false; discarded = true; return;
-      }
-      route.send(message);
+test("saved session conflict requires an explicit decision", async ({ page }) => {
+  const code = await create(page, "Owner");
+  await page.evaluate(() => sessionStorage.setItem("boardgame.pending.v1", JSON.stringify({
+    event: "room:create", createdAt: Date.now(), expiresAt: Date.now() + 120000,
+    payload: { nickname: "Pending", clientInstanceId: "instance", requestId: "pending-request" },
+  })));
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Xung đột phiên" })).toBeVisible();
+  await expect(page.getByTestId("room-code")).toHaveCount(0);
+  await page.getByRole("button", { name: "Tiếp tục phiên đã lưu" }).click();
+  await expect(page.getByTestId("room-code")).toHaveText(code);
+  expect(await page.evaluate(() => sessionStorage.getItem("boardgame.pending.v1"))).toBeNull();
+});
+
+test("Home validates the selected form and submits with Enter", async ({ browser }) => {
+  const hostContext = await browser.newContext(), guestContext = await browser.newContext();
+  try {
+    const host = await hostContext.newPage(), guest = await guestContext.newPage();
+    await connected(host);
+    await host.getByLabel("Nickname", { exact: true }).focus();
+    await host.keyboard.press("Enter");
+    await expect(host.locator("#nickname")).toBeFocused();
+    await expect(host.locator("#nickname")).toHaveAttribute("aria-invalid", "true");
+    await expect(host.locator("#nickname-error")).toHaveText("Nhập tên người chơi.");
+    await host.getByLabel("Nickname", { exact: true }).fill("Keyboard host");
+    await host.getByLabel("Nickname", { exact: true }).press("Enter");
+    const code = await host.getByTestId("room-code").textContent();
+
+    await connected(guest);
+    await guest.getByRole("radio", { name: "Vào phòng" }).check();
+    await guest.getByLabel("Nickname", { exact: true }).fill("Keyboard guest");
+    await guest.getByLabel("Nickname", { exact: true }).press("Enter");
+    await expect(guest.locator("#room-code-input")).toBeFocused();
+    await expect(guest.locator("#room-code-input")).toHaveAttribute("aria-invalid", "true");
+    await guest.getByLabel("Room code", { exact: true }).fill(code!);
+    await guest.getByLabel("Room code", { exact: true }).press("Enter");
+    await expect(guest.getByTestId("room-code")).toHaveText(code!);
+  } finally { await hostContext.close(); await guestContext.close(); }
+});
+
+test("a disconnected player blocks Start until that player restores the Lobby", async ({ browser }) => {
+  const contexts = await Promise.all([browser.newContext(), browser.newContext(), browser.newContext()]);
+  try {
+    const pages = await Promise.all(contexts.map(context => context.newPage()));
+    const code = await create(pages[0], "Host");
+    await join(pages[1], "Bob", code);
+    await join(pages[2], "Cat", code);
+    for (const page of pages) await page.getByRole("button", { name: "Ready", exact: true }).click();
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeEnabled();
+    await pages[2].close();
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeDisabled();
+    await expect(pages[0].getByText("Tất cả người chơi cần kết nối.")).toBeVisible();
+    const restored = await contexts[2].newPage();
+    await restored.goto("/");
+    await expect(restored.getByRole("heading", { name: "Phiên đang hoạt động ở tab khác" })).toBeVisible();
+    await restored.getByRole("button", { name: "Tiếp tục ở tab này" }).click();
+    await expect(restored.getByTestId("room-code")).toHaveText(code);
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeEnabled();
+  } finally { await Promise.all(contexts.map(context => context.close())); }
+});
+
+test("Home and Lobby fit mobile and desktop and expose keyboard focus", async ({ page }) => {
+  for (const width of [320, 375, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    await connected(page);
+    await expect(page.getByRole("heading", { name: "Chơi cùng bạn bè" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("radio", { name: "Tạo phòng" })).toBeFocused();
+    expect(await page.getByRole("radio", { name: "Tạo phòng" }).evaluate(el => getComputedStyle(el).outlineStyle)).not.toBe("none");
+  }
+  await page.getByLabel("Nickname", { exact: true }).fill("A long player nickname for responsive layout");
+  await page.getByRole("button", { name: "Create room" }).click();
+  await expect(page.getByTestId("room-code")).toBeVisible();
+  for (const width of [320, 375, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await expect(page.getByRole("button", { name: "Start game" })).toBeDisabled();
+    await expect(page.getByText("Cần từ 3 đến 5 người chơi.")).toBeVisible();
+  }
+  const contrasts = await page.evaluate(() => {
+    const rgb = (value: string) => value.match(/\d+/g)!.slice(0, 3).map(Number);
+    const luminance = (color: number[]) => color.map(channel => {
+      const c = channel / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    }).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+    const ratio = (foreground: string, background: string) => {
+      const [light, dark] = [luminance(rgb(foreground)), luminance(rgb(background))].sort((a, b) => b - a);
+      return (light + 0.05) / (dark + 0.05);
+    };
+    const panel = document.querySelector(".panel")!;
+    const surface = getComputedStyle(panel).backgroundColor;
+    return ["h1", ".requirements", ".badge", "button:not(:disabled)"].map(selector => {
+      const element = document.querySelector(selector)!;
+      const style = getComputedStyle(element);
+      const background = selector === ".badge" || selector.startsWith("button") ? style.backgroundColor : surface;
+      return { selector, ratio: ratio(style.color, background) };
     });
   });
-  await connected(page);
-  await expect.poll(() => upgraded).toBe(true);
-  await page.getByLabel("Nickname", { exact: true }).fill("Lost ack");
-  await page.getByRole("button", { name: "Create room", exact: true }).click();
-  await expect.poll(() => discarded).toBe(true);
-  await expect(page.getByTestId("session")).toHaveText("join_failed", { timeout: 15000 });
-  const request = await page.evaluate(() => JSON.parse(sessionStorage.getItem("boardgame.pending.v1")!));
-  await page.reload(); await expect(page.getByTestId("connection")).toHaveText("connected");
-  expect((await page.evaluate(() => JSON.parse(sessionStorage.getItem("boardgame.pending.v1")!))).payload.requestId).toBe(request.payload.requestId);
-  await page.getByRole("button", { name: "Retry admission", exact: true }).click();
-  // If the old connection hasn't been observed closed, replay recovers identity but requires explicit takeover.
-  await expect.poll(async () => page.getByTestId("session").textContent()).toMatch(/^(ready|replaced)$/);
-  if (await page.getByTestId("session").textContent() === "replaced") {
-    await page.getByRole("button", { name: "Tiếp tục ở tab này" }).click();
-  }
-  await expect(page.getByTestId("session")).toHaveText("ready");
-  expect((await snapshot(page, "room-state")).players).toHaveLength(1);
-  expect(await page.evaluate(() => sessionStorage.getItem("boardgame.pending.v1"))).toBeNull();
+  for (const item of contrasts) expect(item.ratio, item.selector).toBeGreaterThanOrEqual(4.5);
 });

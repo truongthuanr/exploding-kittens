@@ -249,6 +249,20 @@ export class RealtimeClient {
     if (this.pending.event === "room:join" && "roomCode" in this.pending.payload) this.socket.emit("room:join", this.pending.payload, ack);
     else this.socket.emit("room:create", this.pending.payload, ack);
   };
+  /** Explicitly keep the saved session when a pending admission conflicts with it. */
+  continueSavedSession = () => {
+    if (!this.state.identity || !this.pending || this.state.session === "replaced") return;
+    this.cancel();
+    this.pending = null;
+    this.storage.remove(PENDING_KEY);
+    this.pairs.clear(); this.queuedRoom = null;
+    this.update({ pendingAdmission: false, session: "none", room: null, game: null,
+      private: null, syncing: true, error: null, outcome: null });
+    // A pending admission may have bound this socket to a different player.
+    // Reconnect before restoring the saved session; late admission acks are ignored.
+    if (this.socket.connected) this.socket.disconnect();
+    this.socket.connect();
+  };
   /** Explicit user recovery: an unknown admission may have left a seat on the server. */
   discardAdmission = () => {
     if (this.operation || this.state.identity) return;

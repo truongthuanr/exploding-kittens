@@ -67,6 +67,29 @@ it("handles empty ack, ignores unrelated error, rejects expired admission", () =
   vi.advanceTimersByTime(120001); client.retryAdmission();
   expect(client.getSnapshot().error?.code).toBe("request_expired"); expect(socket.sent).toHaveLength(1);
 });
+it("explicitly keeps saved identity when an admission is pending and ignores its late ack", () => {
+  const local = new Memory(), tab = new Memory();
+  local.setItem(IDENTITY_KEY, JSON.stringify({ version: 1, roomId: "room", roomCode: "ROOM01", playerId: "player", playerSessionId: "session" }));
+  tab.setItem(PENDING_KEY, JSON.stringify({
+    event: "room:create", createdAt: Date.now(), expiresAt: Date.now() + 120000,
+    payload: { nickname: "Other", clientInstanceId: "instance", requestId: "pending-request" },
+  }));
+  const { client, socket } = setup(false, local, tab);
+  expect(client.getSnapshot()).toMatchObject({ pendingAdmission: true, session: "join_failed" });
+  expect(socket.sent).toHaveLength(0);
+  client.retryAdmission();
+  const old = socket.sent.at(-1)!;
+  client.continueSavedSession();
+  expect(tab.getItem(PENDING_KEY)).toBeNull();
+  expect(client.getSnapshot()).toMatchObject({ pendingAdmission: false, session: "restoring", room: null, private: null });
+  expect(socket.sent.at(-1)?.event).toBe("player:reconnect");
+  old.ack?.({ ...bootstrap(9), playerSessionId: "other-session" });
+  expect(client.getSnapshot().identity?.playerSessionId).toBe("session");
+  expect(client.getSnapshot().session).toBe("restoring");
+  complete(socket);
+  expect(client.getSnapshot()).toMatchObject({ session: "ready", pendingAdmission: false });
+  expect(client.getSnapshot().identity?.playerSessionId).toBe("session");
+});
 it("recovers identity without silently taking over another socket", () => {
   const { client, socket } = setup(); client.createRoom("Alice"); complete(socket, { ...bootstrap(), requiresTakeover: true });
   expect(client.getSnapshot().identity?.playerSessionId).toBe("session");
