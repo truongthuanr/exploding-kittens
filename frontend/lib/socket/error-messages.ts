@@ -25,6 +25,8 @@ const messages: Record<string, UserError> = {
   invalid_session: { message: "Phiên người chơi không còn hợp lệ. Hãy tạo hoặc vào phòng mới.", action: null },
   sync_overflow: { message: "Dữ liệu trận đấu chưa đồng bộ. Hãy thử khôi phục phiên.", action: "retry_restore" },
   not_ready: { message: "Đợi kết nối và phiên đồng bộ xong rồi thử lại.", action: null },
+  action_outcome_unknown: { message: "Chưa xác định được thao tác đã được xử lý hay chưa. Hãy khôi phục phiên trước khi tiếp tục.", action: "retry_restore" },
+  invalid_action_ack: { message: "Phản hồi thao tác không hợp lệ. Hãy khôi phục phiên trước khi tiếp tục.", action: "retry_restore" },
   game_not_found: { message: "Không tìm thấy trận đấu. Hãy thử khôi phục phiên.", action: "retry_restore" },
   game_not_in_progress: { message: "Trận đấu hiện không diễn ra.", action: null },
   player_not_found: { message: "Không tìm thấy người chơi trong trận.", action: null },
@@ -46,6 +48,9 @@ const messages: Record<string, UserError> = {
 };
 
 export function describeRealtimeError(error: ErrorEvent, session: SessionStatus): UserError {
+  if (error.code === "request_conflict" && session !== "join_failed") {
+    return { message: "Mã yêu cầu thao tác đã được dùng cho hành động khác. Hãy khôi phục phiên trước khi tiếp tục.", action: "retry_restore" };
+  }
   if (error.code === "timeout" || error.code === "invalid_ack") {
     if (session === "join_failed") {
       return { message: "Chưa xác định được kết quả tạo hoặc vào phòng. Hãy thử lại cùng yêu cầu; máy chủ có thể đã xử lý yêu cầu trước đó.", action: "retry_admission" };

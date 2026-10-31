@@ -30,7 +30,7 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 - [ ] Add pure selectors for the current player, local player, own turn, eliminated state, playable cards, valid Favor targets, and draw availability.
 - [ ] Require a connected socket, ready session, synchronized current public/private state, `in_game` room, `phase === "turn_action"`, and the local player's turn before enabling actions. Keep server validation authoritative.
 - [ ] Do not offer `exploding_kitten` or `defuse` as normal playable hand actions. Show why an action is unavailable without relying on color alone.
-- [ ] Allow one in-flight game action per tab. Match success to the submitted `requestId` and apply the paired snapshot at or above its confirmed `stateVersion` before releasing the pending state; clear a failed action only on its correlated error.
+- [x] Allow one in-flight game action per tab. Match success to the submitted `requestId` and apply the paired snapshot at or above its confirmed `stateVersion` before releasing the pending state; clear a failed action only on its correlated error.
 
 ### 2. Game board and player information
 - [ ] Replace the Game placeholder with the current turn, turn number, `pendingDraws`, phase, and a clear indication of whose turn it is.
@@ -46,8 +46,8 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 - [ ] Add a draw control that sends `turn:draw-card` only when allowed; explain pending draws, turn ownership, and disabled states in the UI.
 - [ ] Reflect action results only after the authoritative public/private snapshot arrives, including Attack/Skip turn changes, Favor hand changes, automatic Defuse, explosion, and elimination.
 - [x] Add a typed success acknowledgement for `turn:play-card` and `turn:draw-card` with `requestId` and resulting `stateVersion`; a duplicate request ID acknowledges without applying the action again, and failures keep correlated `error` events.
-- [ ] Return/expose the request ID and pending status through the frontend realtime client and consume the success acknowledgement.
-- [ ] On acknowledgement timeout or disconnect, show that the outcome is unknown and offer restore/reconciliation. Do not automatically resend the action or create a new request ID for an uncertain action.
+- [x] Return/expose the request ID and pending status through the frontend realtime client and consume the success acknowledgement.
+- [x] On acknowledgement timeout or disconnect, show that the outcome is unknown and offer restore/reconciliation. Do not automatically resend the action or create a new request ID for an uncertain action.
 - [ ] Surface server action errors near the controls and allow a new valid action after the failed request is resolved. Do not optimistically change cards, turn ownership, or pending draws.
 
 ### 4. Public game log
@@ -66,7 +66,7 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 - [ ] E2E-test a 3-player browser match from lobby through winner/result, including representative play/draw actions, action pending/error recovery, and the bounded log UI.
 - [ ] Cover every action type, Attack pending draws, automatic Defuse, elimination, and log outcomes with deterministic backend tests using a controlled deck/randomizer; do not make browser tests depend on random draws.
 - [ ] E2E-test reload/reconnect during a match and after finish; verify correct private hand, public log history, action lock while restoring, and no hidden-information leak to other players.
-- [ ] Test lost/delayed success acknowledgement, correlated action error, and restore after an unknown action outcome without a second action resolution. Backend duplicate/conflict and action-history tests are complete.
+- [x] Test lost/delayed success acknowledgement, correlated action error, and restore after an unknown action outcome without a second action resolution. Backend duplicate/conflict and action-history tests are complete.
 - [ ] Run `npm test`, `npm run typecheck`, `npm run build`, and `npm run test:e2e` from `frontend/`; run relevant backend tests for the action-history contract change.
 
 ## Done when

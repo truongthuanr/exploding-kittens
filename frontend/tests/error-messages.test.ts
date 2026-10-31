@@ -30,6 +30,12 @@ describe("describeRealtimeError", () => {
       .toBeNull();
   });
 
+  it("routes uncertain game actions to restore instead of admission recovery", () => {
+    for (const code of ["action_outcome_unknown", "invalid_action_ack", "request_conflict"]) {
+      expect(describeRealtimeError({ code, message: "raw" }, "ready").action).toBe("retry_restore");
+    }
+  });
+
   it("uses concise lobby messages and a safe fallback for unknown codes", () => {
     expect(describeRealtimeError({ code: "players_not_ready", message: "raw" }, "ready").message)
       .toContain("Ready");
