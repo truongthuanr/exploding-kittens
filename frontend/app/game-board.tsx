@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CardType, GamePhase, PlayerStatus } from "../../shared/contracts";
 import type { RealtimeClient, RealtimeState } from "../lib/socket/client";
 import { describeRealtimeError } from "../lib/socket/error-messages";
@@ -39,6 +39,17 @@ export function GameBoard({ state, client }: { state: RealtimeState; client: Rea
   const [favorCardId, setFavorCardId] = useState<string | null>(null);
   const [targetPlayerId, setTargetPlayerId] = useState<string | null>(null);
   const [lastRequestId, setLastRequestId] = useState<string | null>(null);
+  const favorTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const firstFavorTargetRef = useRef<HTMLInputElement | null>(null);
+  const restoreFavorFocusRef = useRef(false);
+
+  useEffect(() => {
+    if (favorCardId) firstFavorTargetRef.current?.focus();
+    else if (restoreFavorFocusRef.current) {
+      favorTriggerRef.current?.focus();
+      restoreFavorFocusRef.current = false;
+    }
+  }, [favorCardId]);
 
   useEffect(() => {
     setFavorCardId(null);
@@ -116,8 +127,9 @@ export function GameBoard({ state, client }: { state: RealtimeState; client: Rea
             {card.blocker !== "card_not_playable" &&
               <button type="button" disabled={!card.canPlay || !client || !!favorCardId}
                 aria-describedby={favorCardId ? `card-reason-${index} favor-planning-note` : `card-reason-${index}`}
-                onClick={() => {
+                onClick={event => {
                   if (card.cardType === "favor") {
+                    favorTriggerRef.current = event.currentTarget;
                     setFavorCardId(card.cardId);
                     setTargetPlayerId(null);
                   } else submitPlay(card.cardId);
@@ -143,8 +155,8 @@ export function GameBoard({ state, client }: { state: RealtimeState; client: Rea
       {favorCardId && selectedFavor && <fieldset className="favor-picker">
         <legend>Chọn người nhận yêu cầu Xin bài</legend>
         <p className="helper">Chọn một đối thủ còn bài, rồi xác nhận hoặc hủy.</p>
-        {actions.favorTargets.map(player => <label key={player.playerId}>
-          <input type="radio" name="favor-target" value={player.playerId}
+        {actions.favorTargets.map((player, index) => <label key={player.playerId}>
+          <input ref={index === 0 ? firstFavorTargetRef : undefined} type="radio" name="favor-target" value={player.playerId}
             checked={targetPlayerId === player.playerId}
             onChange={() => setTargetPlayerId(player.playerId)} />
           {player.nickname} ({player.handCount} lá)
@@ -159,7 +171,11 @@ export function GameBoard({ state, client }: { state: RealtimeState; client: Rea
               }
             }}>Xác nhận Xin bài</button>
           <button type="button" className="secondary"
-            onClick={() => { setFavorCardId(null); setTargetPlayerId(null); }}>Hủy</button>
+            onClick={() => {
+              restoreFavorFocusRef.current = true;
+              setFavorCardId(null);
+              setTargetPlayerId(null);
+            }}>Hủy</button>
         </div>
       </fieldset>}
       {state.pendingAction && <p className="helper" role="status">{state.pendingAction.status === "unknown"

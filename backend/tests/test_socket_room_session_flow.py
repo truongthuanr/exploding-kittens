@@ -1205,3 +1205,37 @@ def test_duplicate_draw_remains_idempotent_after_many_other_requests(monkeypatch
     assert duplicate == first
     assert [card.card_id for card in runtime.game_state.draw_pile] == ["second-draw"]
     assert len(runtime.action_history) == 1
+
+
+def test_attack_and_regular_draw_record_final_public_outcomes(monkeypatch) -> None:
+    _room_service, _session_service, _game_registry, runtime = setup_started_game(monkeypatch)
+    set_player_hand(runtime, "player-1", [card("attack-log", CardType.ATTACK)])
+    runtime.game_state.draw_pile = [card("safe-draw", CardType.SKIP)]
+    emitted: list[tuple[str, dict, str]] = []
+
+    async def fake_emit(event: str, data: dict, **kwargs) -> None:
+        emitted.append((event, data, kwargs.get("room") or kwargs["to"]))
+
+    monkeypatch.setattr(server.sio, "emit", fake_emit)
+
+    async def run() -> None:
+        await server.handle_turn_play_card(
+            "sid-host", {"requestId": "attack-log-1", "cardId": "attack-log"}
+        )
+        await server.handle_turn_draw_card("sid-guest", {"requestId": "safe-draw-1"})
+
+    asyncio.run(run())
+
+    public = [data for event, data, _ in emitted if event == "game:state"]
+    assert [snapshot["recentAction"]["actionType"] for snapshot in public] == [
+        "play_attack", "draw_card",
+    ]
+    assert public[0]["pendingDraws"] == 2
+    assert public[1]["pendingDraws"] == 1
+    assert [entry["actionType"] for entry in public[1]["actionHistory"]] == [
+        "play_attack", "draw_card",
+    ]
+    assert [entry["stateVersion"] for entry in public[1]["actionHistory"]] == [
+        public[0]["stateVersion"], public[1]["stateVersion"],
+    ]
+    assert "safe-draw" not in str(public[1])

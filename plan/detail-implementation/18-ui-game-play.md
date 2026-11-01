@@ -61,13 +61,13 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 - [x] Keep the result correct after reload/reconnect and when `room:updated` / `game:state` arrive in either order.
 
 ### 6. UX and verification
-- [ ] Support mobile and desktop without horizontal overflow; use semantic controls, keyboard navigation, visible focus, and accessible status/error announcements.
+- [x] Support mobile and desktop without horizontal overflow; use semantic controls, keyboard navigation, visible focus, and accessible status/error announcements.
 - [x] Unit-test selector edge cases: wrong turn, disconnected/restoring, stale state pair, eliminated player, unplayable cards, invalid Favor targets, pending action, and finished match.
-- [ ] E2E-test a 3-player browser match from lobby through winner/result, including representative play/draw actions, action pending/error recovery, and the bounded log UI.
-- [ ] Cover every action type, Attack pending draws, automatic Defuse, elimination, and log outcomes with deterministic backend tests using a controlled deck/randomizer; do not make browser tests depend on random draws.
-- [ ] E2E-test reload/reconnect during a match and after finish; verify correct private hand, public log history, action lock while restoring, and no hidden-information leak to other players.
+- [x] E2E-test a 3-player browser match from lobby through winner/result, including representative play/draw actions, action pending/error recovery, and the bounded log UI.
+- [x] Cover every action type, Attack pending draws, automatic Defuse, elimination, and log outcomes with deterministic backend tests using a controlled deck/randomizer; do not make browser tests depend on random draws.
+- [x] E2E-test reload/reconnect during a match and after finish; verify correct private hand, public log history, action lock while restoring, and no hidden-information leak to other players.
 - [x] Test lost/delayed success acknowledgement, correlated action error, and restore after an unknown action outcome without a second action resolution. Backend duplicate/conflict and action-history tests are complete.
-- [ ] Run `npm test`, `npm run typecheck`, `npm run build`, and `npm run test:e2e` from `frontend/`; run relevant backend tests for the action-history contract change.
+- [x] Run `npm test`, `npm run typecheck`, `npm run build`, and `npm run test:e2e` from `frontend/`; run relevant backend tests for the action-history contract change.
 
 ## Done when
 - Players can use the browser UI to play a full match

@@ -96,3 +96,15 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .final-player { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; min-width: 0; padding: 12px 14px; border: 1px solid #d8e0e5; border-radius: 8px; }
 .final-player-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
 .final-player-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Long player names, room codes and translated action text must wrap inside each panel. */
+.page, .panel, .game-board > *, .finished-result > * { min-width: 0; }
+.room-heading > *, .site-header > *, .game-player > *, .final-player > * { min-width: 0; }
+.room-heading h1, .site-header, .player-name, .game-player-name, .final-player-name,
+.public-action-log-list, .favor-picker, .notice { overflow-wrap: anywhere; }
+.favor-picker { min-width: 0; }
+.favor-picker label { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .site-header { flex-wrap: wrap; }
+  .game-actions > button, .favor-picker .button-row button { width: 100%; }
+}
