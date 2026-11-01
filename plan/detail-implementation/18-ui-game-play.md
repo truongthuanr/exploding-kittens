@@ -56,13 +56,13 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 - [x] Keep private cards, deck order, and Favor's transferred card type out of public summaries. Render player names and final outcomes, label the list as the 50 most recent actions, and show a sensible empty state.
 
 ### 5. Elimination and result
-- [ ] Show elimination in the board/player list from authoritative public state, including the local player's read-only state.
-- [ ] Replace the Finished placeholder with winner nickname, local win/loss result, and final player statuses. Select the result from the synchronized finished game snapshot, not the notification event alone.
-- [ ] Keep the result correct after reload/reconnect and when `room:updated` / `game:state` arrive in either order.
+- [x] Show elimination in the board/player list from authoritative public state, including the local player's read-only state.
+- [x] Replace the Finished placeholder with winner nickname, local win/loss result, and final player statuses. Select the result from the synchronized finished game snapshot, not the notification event alone.
+- [x] Keep the result correct after reload/reconnect and when `room:updated` / `game:state` arrive in either order.
 
 ### 6. UX and verification
 - [ ] Support mobile and desktop without horizontal overflow; use semantic controls, keyboard navigation, visible focus, and accessible status/error announcements.
-- [ ] Unit-test selector edge cases: wrong turn, disconnected/restoring, stale state pair, eliminated player, unplayable cards, invalid Favor targets, pending action, and finished match.
+- [x] Unit-test selector edge cases: wrong turn, disconnected/restoring, stale state pair, eliminated player, unplayable cards, invalid Favor targets, pending action, and finished match.
 - [ ] E2E-test a 3-player browser match from lobby through winner/result, including representative play/draw actions, action pending/error recovery, and the bounded log UI.
 - [ ] Cover every action type, Attack pending draws, automatic Defuse, elimination, and log outcomes with deterministic backend tests using a controlled deck/randomizer; do not make browser tests depend on random draws.
 - [ ] E2E-test reload/reconnect during a match and after finish; verify correct private hand, public log history, action lock while restoring, and no hidden-information leak to other players.

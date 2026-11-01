@@ -6,7 +6,7 @@ import type { RealtimeClient, RealtimeState } from "../lib/socket/client";
 import { selectLobbyActions, selectRoomView, type LobbyBlocker, type RoomView } from "../lib/socket/selectors";
 import { describeRealtimeError } from "../lib/socket/error-messages";
 import { GameBoard } from "./game-board";
-import { PublicActionLog } from "./public-action-log";
+import { FinishedResultView } from "./finished-result";
 
 const reasons: Record<LobbyBlocker, string> = {
   connection_unavailable: "Chưa kết nối với máy chủ.",
@@ -208,7 +208,7 @@ export default function Page() {
       view === "lobby" || view === "read_only_lobby" ? <Lobby state={state} client={client} readOnly={view === "read_only_lobby"} /> :
       view === "game_loading" ? <section className="panel"><h1 tabIndex={-1}>Đang tải trận đấu</h1><p role="status">Đang đồng bộ trạng thái trận đấu.</p></section> :
       view === "game" ? <GameBoard state={state} client={client} /> :
-      view === "finished" ? <section className="panel"><h1 tabIndex={-1}>Trận đấu đã kết thúc</h1><p>Giao diện kết quả sẽ được bổ sung ở bước tiếp theo.</p><PublicActionLog game={state.game!} /></section> :
+      view === "finished" ? <FinishedResultView state={state} /> :
       <Recovery view={view} state={state} client={client} />}
     <StatusMessages state={state} client={client} />
   </main>;

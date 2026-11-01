@@ -113,6 +113,28 @@ export function selectIsEliminated(state: RealtimeState): boolean {
   return selectLocalPlayer(state)?.status === "eliminated";
 }
 
+export type FinishedResult = {
+  winner: PublicGamePlayer | null;
+  localPlayer: PublicGamePlayer;
+  outcome: "win" | "loss" | "no_winner";
+  players: PublicGamePlayer[];
+};
+
+export function selectFinishedResult(state: RealtimeState): FinishedResult | null {
+  if (selectRoomView(state) !== "finished") return null;
+  const game = state.game!;
+  const localPlayer = selectLocalPlayer(state);
+  if (!localPlayer) return null;
+  const winner = game.winnerPlayerId
+    ? game.players.find(player => player.playerId === game.winnerPlayerId) ?? null
+    : null;
+  if (game.winnerPlayerId && !winner) return null;
+  return {
+    winner, localPlayer, players: game.players,
+    outcome: !winner ? "no_winner" : winner.playerId === localPlayer.playerId ? "win" : "loss",
+  };
+}
+
 export function selectValidFavorTargets(state: RealtimeState): PublicGamePlayer[] {
   if (!hasCurrentGamePair(state)) return [];
   return state.game!.players.filter(player => player.playerId !== state.identity!.playerId &&
@@ -173,7 +195,14 @@ export function selectRoomView(state: RealtimeState): RoomView {
   if (state.room!.status === "in_game" || state.room!.status === "finished") {
     if (state.syncing || !hasCurrentGamePair(state)) return "game_loading";
     if (state.room!.status === "finished" && state.game!.phase !== "finished") return "game_loading";
-    if (state.game!.phase === "finished") return "finished";
+    if (state.game!.phase === "finished") {
+      const game = state.game!;
+      if (!game.players.some(player => player.playerId === state.identity!.playerId) ||
+          (game.winnerPlayerId && !game.players.some(player => player.playerId === game.winnerPlayerId))) {
+        return "safe_recovery";
+      }
+      return "finished";
+    }
     return state.room!.status === "in_game" ? "game" : "safe_recovery";
   }
   return "safe_recovery";

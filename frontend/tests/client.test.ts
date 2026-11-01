@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { RealtimeClient, type GameSocket } from "../lib/socket/client";
+import { selectFinishedResult, selectRoomView } from "../lib/socket/selectors";
 import { IDENTITY_KEY, INSTANCE_KEY, PENDING_KEY, SessionStorage } from "../lib/socket/storage";
 import type { BootstrapResponse } from "../../shared/contracts";
 class Memory {
@@ -132,6 +133,33 @@ it("finished-game restore does not wait for turn:started", () => {
   const { client, socket } = setup(true); const b = bootstrap(1, true); b.room.status = "finished"; b.game!.phase = "finished"; complete(socket, b);
   expect(client.getSnapshot().session).toBe("ready");
 });
+it("shows finished result only from a paired snapshot for either room/game arrival order", () => {
+  const final = bootstrap(2, true);
+  final.room.status = "finished";
+  final.game!.phase = "finished";
+  final.game!.winnerPlayerId = "player";
+
+  const roomFirst = setup(true);
+  complete(roomFirst.socket, bootstrap(1, true));
+  roomFirst.socket.receive("game:ended", { winnerPlayerId: "player" });
+  expect(selectRoomView(roomFirst.client.getSnapshot())).toBe("game");
+  roomFirst.socket.receive("room:updated", final.room);
+  expect(selectRoomView(roomFirst.client.getSnapshot())).toBe("game_loading");
+  roomFirst.socket.receive("game:state", final.game);
+  expect(selectRoomView(roomFirst.client.getSnapshot())).toBe("game_loading");
+  roomFirst.socket.receive("player:private-state", final.private);
+  expect(selectRoomView(roomFirst.client.getSnapshot())).toBe("finished");
+  expect(selectFinishedResult(roomFirst.client.getSnapshot())?.outcome).toBe("win");
+
+  const gameFirst = setup(true);
+  complete(gameFirst.socket, bootstrap(1, true));
+  gameFirst.socket.receive("player:private-state", final.private);
+  gameFirst.socket.receive("game:state", final.game);
+  expect(selectRoomView(gameFirst.client.getSnapshot())).toBe("finished");
+  gameFirst.socket.receive("room:updated", final.room);
+  expect(selectFinishedResult(gameFirst.client.getSnapshot())?.winner?.nickname).toBe("Alice");
+});
+
 it("rejects bootstrap containing another player's hand", () => {
   const { client, socket } = setup(true); const b = bootstrap(1, true); b.private!.playerId = "other"; complete(socket, b);
   expect(client.getSnapshot().session).toBe("restore_failed");

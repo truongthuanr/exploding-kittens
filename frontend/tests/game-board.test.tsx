@@ -71,11 +71,12 @@ describe("GameBoard", () => {
       },
       private: { ...state.private!, stateVersion: 5, visibleFutureCards: null },
     };
-    const html = renderToStaticMarkup(<GameBoard state={next} client={null} />);
+    const html = renderToStaticMarkup(<GameBoard state={next} client={{} as RealtimeClient} />);
     expect(html).toContain("Bạn đã bị loại");
     expect(html).toContain("Đã bị loại");
     expect(html).not.toContain("Các lá bài sắp tới");
     expect(html).not.toContain("Có thể đánh trong lượt này.");
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Rút bài<\/button>/);
   });
 
   it("hides the board and private hand while restoring", () => {

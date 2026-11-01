@@ -87,3 +87,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .public-action-log > .helper { margin: 0 0 12px; }
 .public-action-log-list { display: grid; gap: 8px; margin: 0; padding-left: 1.5rem; }
 .public-action-log-list li { padding: 9px 12px; border: 1px solid #d8e0e5; border-radius: 8px; overflow-wrap: anywhere; }
+
+.finished-result { display: grid; gap: 24px; }
+.finished-result h2 { font-size: 1.15rem; margin: 0 0 12px; }
+.result-message { margin: 14px 0; padding: 14px 16px; border-left: 4px solid #144e68; background: #eef4f6; font-size: 1.15rem; font-weight: 750; }
+.winner-name { margin: 0; overflow-wrap: anywhere; }
+.final-players { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.final-player { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; min-width: 0; padding: 12px 14px; border: 1px solid #d8e0e5; border-radius: 8px; }
+.final-player-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
+.final-player-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
