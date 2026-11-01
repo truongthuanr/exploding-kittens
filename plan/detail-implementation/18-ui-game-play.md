@@ -41,14 +41,14 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 - [x] Keep the board readable but non-interactive for eliminated players with a ready session. During disconnect/restore, show the blocking Recovery view and hide the board/private hand until a synchronized bootstrap is applied.
 
 ### 3. Play and draw flows
-- [ ] Provide a play control for Skip, Attack, Shuffle, See the Future, and Favor cards that are currently available to the local player.
-- [ ] For Favor, let the player select an eligible living opponent with at least one card, review/cancel the choice, and send `targetPlayerId` with the selected `cardId`.
-- [ ] Add a draw control that sends `turn:draw-card` only when allowed; explain pending draws, turn ownership, and disabled states in the UI.
-- [ ] Reflect action results only after the authoritative public/private snapshot arrives, including Attack/Skip turn changes, Favor hand changes, automatic Defuse, explosion, and elimination.
+- [x] Provide a play control for Skip, Attack, Shuffle, See the Future, and Favor cards that are currently available to the local player.
+- [x] For Favor, let the player select an eligible living opponent with at least one card, review/cancel the choice, and send `targetPlayerId` with the selected `cardId`.
+- [x] Add a draw control that sends `turn:draw-card` only when allowed; explain pending draws, turn ownership, and disabled states in the UI.
+- [x] Reflect action results only after the authoritative public/private snapshot arrives, including Attack/Skip turn changes, Favor hand changes, automatic Defuse, explosion, and elimination.
 - [x] Add a typed success acknowledgement for `turn:play-card` and `turn:draw-card` with `requestId` and resulting `stateVersion`; a duplicate request ID acknowledges without applying the action again, and failures keep correlated `error` events.
 - [x] Return/expose the request ID and pending status through the frontend realtime client and consume the success acknowledgement.
 - [x] On acknowledgement timeout or disconnect, show that the outcome is unknown and offer restore/reconciliation. Do not automatically resend the action or create a new request ID for an uncertain action.
-- [ ] Surface server action errors near the controls and allow a new valid action after the failed request is resolved. Do not optimistically change cards, turn ownership, or pending draws.
+- [x] Surface server action errors near the controls and allow a new valid action after the failed request is resolved. Do not optimistically change cards, turn ownership, or pending draws.
 
 ### 4. Public game log
 - [x] Add `actionHistory` to the shared TypeScript contract and matching backend response model as the latest 50 public entries, ordered by `stateVersion`; include it in normal game state and reconnect/bootstrap snapshots.

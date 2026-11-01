@@ -206,7 +206,7 @@ export default function Page() {
     {view === "home" || view === "admission_home" ? <Home state={state} client={client} /> :
       view === "lobby" || view === "read_only_lobby" ? <Lobby state={state} client={client} readOnly={view === "read_only_lobby"} /> :
       view === "game_loading" ? <section className="panel"><h1 tabIndex={-1}>Đang tải trận đấu</h1><p role="status">Đang đồng bộ trạng thái trận đấu.</p></section> :
-      view === "game" ? <GameBoard state={state} /> :
+      view === "game" ? <GameBoard state={state} client={client} /> :
       view === "finished" ? <section className="panel"><h1 tabIndex={-1}>Trận đấu đã kết thúc</h1><p>Giao diện kết quả sẽ được bổ sung ở bước tiếp theo.</p></section> :
       <Recovery view={view} state={state} client={client} />}
     <StatusMessages state={state} client={client} />

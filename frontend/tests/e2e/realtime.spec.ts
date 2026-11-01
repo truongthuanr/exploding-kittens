@@ -61,6 +61,10 @@ test("three players create, join, ready, start, and restore into the game bounda
     await pages[0].reload();
     await expect(pages[0].getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
     await expect(pages[0].locator(".hand-card").first()).toBeVisible();
+    await expect(pages[0].getByRole("button", { name: "Rút bài" })).toBeEnabled();
+    await pages[0].getByRole("button", { name: "Rút bài" }).click();
+    await expect(pages[1].getByText("Đến lượt bạn.")).toBeVisible();
+    await expect(pages[0].getByRole("button", { name: "Rút bài" })).toBeDisabled();
     await pages[0].setViewportSize({ width: 375, height: 812 });
     expect(await pages[0].evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(await pages[0].evaluate(() => localStorage.getItem("boardgame.identity.v1"))).not.toContain("hand");
