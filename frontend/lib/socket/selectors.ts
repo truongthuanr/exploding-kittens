@@ -1,4 +1,5 @@
 import type { RealtimeState } from "./client";
+import type { CardType, PrivateCardView, PublicGamePlayer } from "../../../shared/contracts";
 
 export type RoomView =
   | "home"
@@ -37,6 +38,49 @@ export type LobbyActions = {
   startBlockers: LobbyBlocker[];
 };
 
+export type GameActionBlocker =
+  | "connection_unavailable"
+  | "session_unavailable"
+  | "synchronizing"
+  | "game_not_in_progress"
+  | "player_missing"
+  | "player_eliminated"
+  | "wrong_turn"
+  | "phase_unavailable"
+  | "action_pending"
+  | "card_not_playable"
+  | "favor_target_unavailable";
+
+export type GameCardAction = PrivateCardView & {
+  canPlay: boolean;
+  blocker: GameActionBlocker | null;
+};
+
+export type GameActions = {
+  canDraw: boolean;
+  drawBlocker: GameActionBlocker | null;
+  cards: GameCardAction[];
+  favorTargets: PublicGamePlayer[];
+};
+
+const PLAYABLE_CARD_TYPES: ReadonlySet<CardType> = new Set([
+  "skip", "attack", "shuffle", "see_the_future", "favor",
+]);
+
+export const GAME_ACTION_BLOCKER_TEXT: Record<GameActionBlocker, string> = {
+  connection_unavailable: "Đang mất kết nối với máy chủ.",
+  session_unavailable: "Cần khôi phục phiên chơi trước khi hành động.",
+  synchronizing: "Đang đồng bộ trạng thái trận đấu.",
+  game_not_in_progress: "Trận đấu chưa diễn ra hoặc đã kết thúc.",
+  player_missing: "Không tìm thấy người chơi trong trận đấu.",
+  player_eliminated: "Bạn đã bị loại khỏi trận đấu.",
+  wrong_turn: "Chưa đến lượt của bạn.",
+  phase_unavailable: "Chưa thể hành động trong giai đoạn này.",
+  action_pending: "Đang chờ xác nhận hành động trước đó.",
+  card_not_playable: "Lá bài này không thể đánh trực tiếp.",
+  favor_target_unavailable: "Không có đối thủ hợp lệ để dùng Favor.",
+};
+
 export function hasUsableRoom(state: RealtimeState): boolean {
   const { identity, room } = state;
   return !!identity && !!room && room.roomId === identity.roomId &&
@@ -49,6 +93,58 @@ export function hasCurrentGamePair(state: RealtimeState): boolean {
     game.roomId === identity.roomId && privateState.playerId === identity.playerId &&
     game.stateVersion === privateState.stateVersion &&
     game.stateVersion >= room.stateVersion;
+}
+
+export function selectCurrentPlayer(state: RealtimeState): PublicGamePlayer | null {
+  if (!hasCurrentGamePair(state)) return null;
+  return state.game!.players.find(player => player.playerId === state.game!.currentPlayerId) ?? null;
+}
+
+export function selectLocalPlayer(state: RealtimeState): PublicGamePlayer | null {
+  if (!hasCurrentGamePair(state)) return null;
+  return state.game!.players.find(player => player.playerId === state.identity!.playerId) ?? null;
+}
+
+export function selectIsOwnTurn(state: RealtimeState): boolean {
+  return !!selectLocalPlayer(state) && selectCurrentPlayer(state)?.playerId === state.identity?.playerId;
+}
+
+export function selectIsEliminated(state: RealtimeState): boolean {
+  return selectLocalPlayer(state)?.status === "eliminated";
+}
+
+export function selectValidFavorTargets(state: RealtimeState): PublicGamePlayer[] {
+  if (!hasCurrentGamePair(state)) return [];
+  return state.game!.players.filter(player => player.playerId !== state.identity!.playerId &&
+    player.status !== "eliminated" && player.handCount > 0);
+}
+
+function gameActionBlocker(state: RealtimeState): GameActionBlocker | null {
+  if (state.connection !== "connected") return "connection_unavailable";
+  if (state.session !== "ready" || state.pendingAdmission) return "session_unavailable";
+  if (state.syncing || !hasCurrentGamePair(state)) return "synchronizing";
+  if (state.room?.status !== "in_game") return "game_not_in_progress";
+  const localPlayer = selectLocalPlayer(state);
+  if (!localPlayer || !selectCurrentPlayer(state)) return "player_missing";
+  if (localPlayer.status === "eliminated") return "player_eliminated";
+  if (!selectIsOwnTurn(state)) return "wrong_turn";
+  if (state.game!.phase !== "turn_action") return "phase_unavailable";
+  if (state.pendingAction) return "action_pending";
+  return null;
+}
+
+export function selectGameActions(state: RealtimeState): GameActions {
+  const blocker = gameActionBlocker(state);
+  const favorTargets = selectValidFavorTargets(state);
+  const canShowHand = state.connection === "connected" && state.session === "ready" &&
+    !state.syncing && hasCurrentGamePair(state);
+  const cards = canShowHand ? state.private!.hand.map(card => {
+    const cardBlocker: GameActionBlocker | null = !PLAYABLE_CARD_TYPES.has(card.cardType)
+      ? "card_not_playable"
+      : blocker ?? (card.cardType === "favor" && favorTargets.length === 0 ? "favor_target_unavailable" : null);
+    return { ...card, canPlay: cardBlocker === null, blocker: cardBlocker };
+  }) : [];
+  return { canDraw: blocker === null, drawBlocker: blocker, cards, favorTargets };
 }
 
 /** Evaluate in the same priority order as the UI design matrix. */

@@ -27,8 +27,8 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 ## Implementation checklist
 
 ### 1. State selectors and action availability
-- [ ] Add pure selectors for the current player, local player, own turn, eliminated state, playable cards, valid Favor targets, and draw availability.
-- [ ] Require a connected socket, ready session, synchronized current public/private state, `in_game` room, `phase === "turn_action"`, and the local player's turn before enabling actions. Keep server validation authoritative.
+- [x] Add pure selectors for the current player, local player, own turn, eliminated state, playable cards, valid Favor targets, and draw availability.
+- [x] Require a connected socket, ready session, synchronized current public/private state, `in_game` room, `phase === "turn_action"`, and the local player's turn before enabling actions. Keep server validation authoritative.
 - [ ] Do not offer `exploding_kitten` or `defuse` as normal playable hand actions. Show why an action is unavailable without relying on color alone.
 - [x] Allow one in-flight game action per tab. Match success to the submitted `requestId` and apply the paired snapshot at or above its confirmed `stateVersion` before releasing the pending state; clear a failed action only on its correlated error.
 
