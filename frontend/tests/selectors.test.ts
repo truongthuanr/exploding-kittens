@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { EMPTY_STATE, type RealtimeState } from "../lib/socket/client";
-import { hasCurrentGamePair, selectLobbyActions, selectRoomView } from "../lib/socket/selectors";
+import {
+  GAME_ACTION_BLOCKER_TEXT, hasCurrentGamePair, selectCurrentPlayer, selectGameActions,
+  selectIsEliminated, selectIsOwnTurn, selectLobbyActions, selectLocalPlayer,
+  selectRoomView, selectValidFavorTargets,
+} from "../lib/socket/selectors";
 import type { PlayerPrivateStateEvent, PublicGameStateEvent, RoomUpdatedEvent } from "../../shared/contracts";
 
 const identity = { version: 1 as const, roomId: "room", roomCode: "ROOM01", playerId: "self", playerSessionId: "session" };
@@ -24,8 +28,12 @@ function waiting(overrides: Partial<RealtimeState> = {}): RealtimeState {
 function inGame(roomVersion = 2, pairVersion = roomVersion): RealtimeState {
   const game: PublicGameStateEvent = {
     roomId: "room", stateVersion: pairVersion, phase: "turn_action", currentPlayerId: "self",
-    pendingDraws: 1, turnNumber: 1, players: [], discardTopCardType: null,
-    discardCount: 0, winnerPlayerId: null, recentAction: null,
+    pendingDraws: 1, turnNumber: 1,
+    players: players.map(player => ({
+      playerId: player.playerId, nickname: player.nickname, handCount: 2, status: player.status,
+    })),
+    discardTopCardType: null,
+    discardCount: 0, winnerPlayerId: null, recentAction: null, actionHistory: [],
   };
   const privateState: PlayerPrivateStateEvent = {
     playerId: "self", stateVersion: pairVersion, hand: [], visibleFutureCards: null,
@@ -77,6 +85,7 @@ describe("selectRoomView", () => {
     expect(selectRoomView({ ...state, private: { ...state.private!, playerId: "other" } })).toBe("game_loading");
     expect(selectRoomView(inGame(2, 3))).toBe("game");
     expect(selectRoomView({ ...inGame(), syncing: true })).toBe("game_loading");
+    expect(selectRoomView({ ...inGame(), connection: "disconnected" })).toBe("restoring");
   });
 
   it("waits for a current finished pair before showing Finished", () => {
@@ -125,5 +134,100 @@ describe("selectLobbyActions", () => {
     const wrongRoom = waiting({ room: { ...waiting().room!, roomId: "other" } });
     expect(selectLobbyActions(wrongRoom).startBlockers).toEqual(["room_unavailable"]);
     expect(selectLobbyActions(wrongRoom).canToggleReady).toBe(false);
+  });
+});
+
+describe("game action selectors", () => {
+  const hand: PlayerPrivateStateEvent["hand"] = [
+    { cardId: "skip-1", cardType: "skip" },
+    { cardId: "attack-1", cardType: "attack" },
+    { cardId: "shuffle-1", cardType: "shuffle" },
+    { cardId: "future-1", cardType: "see_the_future" },
+    { cardId: "favor-1", cardType: "favor" },
+    { cardId: "defuse-1", cardType: "defuse" },
+    { cardId: "bomb-1", cardType: "exploding_kitten" },
+  ];
+  const ready = () => {
+    const state = inGame();
+    return { ...state, private: { ...state.private!, hand } };
+  };
+
+  it("identifies players, turn, legal cards and Favor targets from the current pair", () => {
+    const state = ready();
+    expect(selectCurrentPlayer(state)?.playerId).toBe("self");
+    expect(selectLocalPlayer(state)?.playerId).toBe("self");
+    expect(selectIsOwnTurn(state)).toBe(true);
+    expect(selectIsEliminated(state)).toBe(false);
+    expect(selectValidFavorTargets(state).map(player => player.playerId)).toEqual(["b", "c"]);
+    const actions = selectGameActions(state);
+    expect(actions.canDraw).toBe(true);
+    expect(actions.drawBlocker).toBeNull();
+    expect(actions.cards.map(card => [card.cardId, card.canPlay])).toEqual([
+      ["skip-1", true], ["attack-1", true], ["shuffle-1", true],
+      ["future-1", true], ["favor-1", true], ["defuse-1", false], ["bomb-1", false],
+    ]);
+    expect(actions.cards.slice(-2).map(card => card.blocker)).toEqual([
+      "card_not_playable", "card_not_playable",
+    ]);
+    expect(GAME_ACTION_BLOCKER_TEXT.wrong_turn).toMatch(/lượt/);
+  });
+
+  it.each([
+    ["disconnected", (state: RealtimeState) => ({ ...state, connection: "disconnected" as const }), "connection_unavailable"],
+    ["restoring", (state: RealtimeState) => ({ ...state, session: "restoring" as const }), "session_unavailable"],
+    ["admission", (state: RealtimeState) => ({ ...state, pendingAdmission: true }), "session_unavailable"],
+    ["syncing", (state: RealtimeState) => ({ ...state, syncing: true }), "synchronizing"],
+    ["stale pair", (state: RealtimeState) => ({ ...state, room: { ...state.room!, stateVersion: 3 } }), "synchronizing"],
+    ["wrong turn", (state: RealtimeState) => ({ ...state, game: { ...state.game!, currentPlayerId: "b" } }), "wrong_turn"],
+    ["draw phase", (state: RealtimeState) => ({ ...state, game: { ...state.game!, phase: "turn_draw" as const } }), "phase_unavailable"],
+    ["pending action", (state: RealtimeState) => ({ ...state, pendingAction: {
+      requestId: "request", kind: "draw-card" as const, status: "pending" as const, confirmedStateVersion: null,
+    } }), "action_pending"],
+    ["unknown outcome", (state: RealtimeState) => ({ ...state, pendingAction: {
+      requestId: "request", kind: "draw-card" as const, status: "unknown" as const, confirmedStateVersion: null,
+    } }), "action_pending"],
+    ["finished", (state: RealtimeState) => ({ ...state,
+      room: { ...state.room!, status: "finished" as const },
+      game: { ...state.game!, phase: "finished" as const },
+    }), "game_not_in_progress"],
+  ] as const)("blocks %s actions with a reason", (_name, change, blocker) => {
+    const actions = selectGameActions(change(ready()));
+    expect(actions.canDraw).toBe(false);
+    expect(actions.drawBlocker).toBe(blocker);
+    if (["disconnected", "restoring", "syncing", "stale pair"].includes(_name)) {
+      expect(actions.cards).toEqual([]);
+    } else {
+      expect(actions.cards[0].canPlay).toBe(false);
+      expect(actions.cards[0].blocker).toBe(blocker);
+    }
+  });
+
+  it("locks an eliminated player's actions and excludes eliminated or empty Favor targets", () => {
+    const state = ready();
+    const game = { ...state.game!, players: state.game!.players.map(player =>
+      player.playerId === "self" ? { ...player, status: "eliminated" as const } :
+      player.playerId === "b" ? { ...player, status: "eliminated" as const } :
+      { ...player, handCount: 0 }) };
+    const eliminated = { ...state, game };
+    expect(selectIsEliminated(eliminated)).toBe(true);
+    expect(selectValidFavorTargets(eliminated)).toEqual([]);
+    expect(selectGameActions(eliminated).drawBlocker).toBe("player_eliminated");
+
+    const noTargets = { ...state, game: { ...game, players: game.players.map(player =>
+      player.playerId === "self" ? { ...player, status: "connected" as const } : player) } };
+    expect(selectGameActions(noTargets).cards.find(card => card.cardType === "favor")?.blocker)
+      .toBe("favor_target_unavailable");
+    expect(selectGameActions(noTargets).cards.find(card => card.cardType === "skip")?.canPlay)
+      .toBe(true);
+  });
+
+  it("does not expose stale player data or private cards", () => {
+    const stale = { ...ready(), private: { ...ready().private!, stateVersion: 1 } };
+    expect(selectCurrentPlayer(stale)).toBeNull();
+    expect(selectLocalPlayer(stale)).toBeNull();
+    expect(selectIsOwnTurn(stale)).toBe(false);
+    expect(selectValidFavorTargets(stale)).toEqual([]);
+    expect(selectGameActions(stale).cards).toEqual([]);
+    expect(selectGameActions(stale).drawBlocker).toBe("synchronizing");
   });
 });

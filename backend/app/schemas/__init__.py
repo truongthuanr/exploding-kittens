@@ -9,7 +9,9 @@ from app.schemas.requests import (
     RoomReadyRequest,
 )
 from app.schemas.responses import (
+    ActionHistoryEntry,
     ErrorEvent,
+    GameActionAck,
     GameEndedEvent,
     GameStartedEvent,
     PlayerEliminatedEvent,
@@ -35,7 +37,9 @@ __all__ = [
     "RoomCreateRequest",
     "RoomJoinRequest",
     "RoomReadyRequest",
+    "ActionHistoryEntry",
     "ErrorEvent",
+    "GameActionAck",
     "GameEndedEvent",
     "GameStartedEvent",
     "PlayerEliminatedEvent",

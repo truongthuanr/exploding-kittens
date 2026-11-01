@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from app.schemas.enums import CardType, GamePhase, PlayerStatus, RoomStatus
+from app.schemas.enums import ActionType, CardType, GamePhase, PlayerStatus, RoomStatus
 
 
 @dataclass(slots=True)
@@ -56,11 +56,22 @@ class GameSetupResult:
 
 
 @dataclass(slots=True)
+class PublicActionRecord:
+    state_version: int
+    actor_player_id: str
+    action_type: ActionType
+    summary: str
+    target_player_id: str | None = None
+
+
+@dataclass(slots=True)
 class GameRuntimeState:
     game_state: ServerGameState
     player_private_states: dict[str, PlayerPrivateState]
     state_version: int = 0
     pending_explosion_card: CardInstance | None = None
+    action_history: list[PublicActionRecord] = field(default_factory=list)
+    processed_actions: dict[tuple[str, str], tuple[tuple[str, ...], int]] = field(default_factory=dict)
 
     @classmethod
     def from_setup_result(cls, setup_result: GameSetupResult) -> "GameRuntimeState":

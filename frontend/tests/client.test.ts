@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { RealtimeClient, type GameSocket } from "../lib/socket/client";
+import { selectFinishedResult, selectRoomView } from "../lib/socket/selectors";
 import { IDENTITY_KEY, INSTANCE_KEY, PENDING_KEY, SessionStorage } from "../lib/socket/storage";
 import type { BootstrapResponse } from "../../shared/contracts";
 class Memory {
@@ -26,7 +27,7 @@ function bootstrap(version = 1, game = false): BootstrapResponse {
     room: { roomId: "room", roomCode: "ROOM01", stateVersion: version, status: game ? "in_game" : "waiting",
       players: [{ playerId: "player", nickname: "Alice", isReady: true, isHost: true, status: "connected" }] },
     game: game ? { roomId: "room", stateVersion: version, phase: "turn_action", currentPlayerId: "player", pendingDraws: 1, turnNumber: 1,
-      players: [{ playerId: "player", nickname: "Alice", handCount: 1, status: "connected" }], discardTopCardType: null, discardCount: 0, winnerPlayerId: null, recentAction: null } : null,
+      players: [{ playerId: "player", nickname: "Alice", handCount: 1, status: "connected" }], discardTopCardType: null, discardCount: 0, winnerPlayerId: null, recentAction: null, actionHistory: [] } : null,
     private: game ? { stateVersion: version, playerId: "player", hand: [{ cardId: "card", cardType: "skip" }], visibleFutureCards: null } : null,
   };
 }
@@ -132,6 +133,33 @@ it("finished-game restore does not wait for turn:started", () => {
   const { client, socket } = setup(true); const b = bootstrap(1, true); b.room.status = "finished"; b.game!.phase = "finished"; complete(socket, b);
   expect(client.getSnapshot().session).toBe("ready");
 });
+it("shows finished result only from a paired snapshot for either room/game arrival order", () => {
+  const final = bootstrap(2, true);
+  final.room.status = "finished";
+  final.game!.phase = "finished";
+  final.game!.winnerPlayerId = "player";
+
+  const roomFirst = setup(true);
+  complete(roomFirst.socket, bootstrap(1, true));
+  roomFirst.socket.receive("game:ended", { winnerPlayerId: "player" });
+  expect(selectRoomView(roomFirst.client.getSnapshot())).toBe("game");
+  roomFirst.socket.receive("room:updated", final.room);
+  expect(selectRoomView(roomFirst.client.getSnapshot())).toBe("game_loading");
+  roomFirst.socket.receive("game:state", final.game);
+  expect(selectRoomView(roomFirst.client.getSnapshot())).toBe("game_loading");
+  roomFirst.socket.receive("player:private-state", final.private);
+  expect(selectRoomView(roomFirst.client.getSnapshot())).toBe("finished");
+  expect(selectFinishedResult(roomFirst.client.getSnapshot())?.outcome).toBe("win");
+
+  const gameFirst = setup(true);
+  complete(gameFirst.socket, bootstrap(1, true));
+  gameFirst.socket.receive("player:private-state", final.private);
+  gameFirst.socket.receive("game:state", final.game);
+  expect(selectRoomView(gameFirst.client.getSnapshot())).toBe("finished");
+  gameFirst.socket.receive("room:updated", final.room);
+  expect(selectFinishedResult(gameFirst.client.getSnapshot())?.winner?.nickname).toBe("Alice");
+});
+
 it("rejects bootstrap containing another player's hand", () => {
   const { client, socket } = setup(true); const b = bootstrap(1, true); b.private!.playerId = "other"; complete(socket, b);
   expect(client.getSnapshot().session).toBe("restore_failed");
@@ -164,4 +192,97 @@ it("corrupt JSON is cleared rather than crashing startup", () => {
   const local = new Memory(); local.setItem(IDENTITY_KEY, '{broken');
   const storage = new SessionStorage(local, local);
   expect(storage.identity()).toBeNull(); expect(local.getItem(IDENTITY_KEY)).toBeNull();
+});
+
+
+it("keeps one action pending until its ack and matching public/private pair arrive", () => {
+  const { client, socket } = setup(true); complete(socket, bootstrap(1, true));
+  const id = client.drawCard();
+  expect(id).toBeTruthy();
+  expect(client.getSnapshot().pendingAction).toMatchObject({ requestId: id, kind: "draw-card", status: "pending" });
+  expect(client.playCard("card")).toBeNull();
+  expect(socket.sent.filter(item => item.event === "turn:play-card")).toHaveLength(0);
+
+  const action = socket.sent.at(-1)!;
+  action.ack?.({ requestId: id, stateVersion: 2 });
+  expect(client.getSnapshot().pendingAction?.confirmedStateVersion).toBe(2);
+  socket.receive("game:state", bootstrap(2, true).game);
+  expect(client.getSnapshot().pendingAction?.requestId).toBe(id);
+  socket.receive("player:private-state", bootstrap(2, true).private);
+  expect(client.getSnapshot().pendingAction).toBeNull();
+  expect(client.getSnapshot().outcome).toBe("known");
+  expect(client.playCard("card")).toBeTruthy();
+});
+
+it("accepts the matching pair before the action ack and ignores a late error", () => {
+  const { client, socket } = setup(true); complete(socket, bootstrap(1, true));
+  const id = client.playCard("card")!;
+  const action = socket.sent.at(-1)!;
+  expect(action.data).toMatchObject({ requestId: id, cardId: "card" });
+  socket.receive("player:private-state", bootstrap(2, true).private);
+  socket.receive("game:state", bootstrap(2, true).game);
+  expect(client.getSnapshot().pendingAction?.requestId).toBe(id);
+  action.ack?.({ requestId: id, stateVersion: 2 });
+  expect(client.getSnapshot().pendingAction).toBeNull();
+  socket.receive("error", { code: "card_not_in_hand", message: "late", requestId: id });
+  expect(client.getSnapshot().error).toBeNull();
+});
+
+it("only a correlated action error releases pending status", () => {
+  const { client, socket } = setup(true); complete(socket, bootstrap(1, true));
+  const id = client.playCard("card", "target")!;
+  const action = socket.sent.at(-1)!;
+  socket.receive("error", { code: "not_current_player", message: "other", requestId: "unrelated" });
+  action.ack?.();
+  expect(client.getSnapshot().pendingAction?.requestId).toBe(id);
+  socket.receive("error", { code: "card_not_in_hand", message: "missing", requestId: id });
+  expect(client.getSnapshot().pendingAction).toBeNull();
+  expect(client.getSnapshot().error).toMatchObject({ code: "card_not_in_hand", requestId: id });
+  action.ack?.({ requestId: id, stateVersion: 2 });
+  expect(client.getSnapshot().error?.code).toBe("card_not_in_hand");
+  expect(client.drawCard()).toBeTruthy();
+});
+
+it("timeout keeps outcome unknown until restore; late ack and snapshots do not replay", () => {
+  const { client, socket } = setup(true); complete(socket, bootstrap(1, true));
+  const id = client.drawCard()!;
+  const action = socket.sent.at(-1)!;
+  vi.advanceTimersByTime(101);
+  expect(client.getSnapshot().pendingAction).toMatchObject({ requestId: id, status: "unknown" });
+  expect(client.getSnapshot().error?.code).toBe("action_outcome_unknown");
+  socket.receive("game:state", bootstrap(2, true).game);
+  socket.receive("player:private-state", bootstrap(2, true).private);
+  action.ack?.({ requestId: id, stateVersion: 2 });
+  expect(client.getSnapshot().pendingAction?.status).toBe("unknown");
+  expect(client.drawCard()).toBeNull();
+
+  client.retryRestore();
+  expect(socket.sent.at(-1)?.event).toBe("player:reconnect");
+  complete(socket, bootstrap(2, true));
+  expect(client.getSnapshot().pendingAction).toBeNull();
+  expect(client.getSnapshot().error).toBeNull();
+  expect(socket.sent.filter(item => item.event === "turn:draw-card")).toHaveLength(1);
+});
+
+it("disconnect and invalid ack require restore before another action", () => {
+  const { client, socket } = setup(true); complete(socket, bootstrap(1, true));
+  const firstId = client.drawCard()!;
+  const first = socket.sent.at(-1)!;
+  first.ack?.({ requestId: "wrong", stateVersion: 2 });
+  expect(client.getSnapshot().error?.code).toBe("invalid_action_ack");
+  expect(client.playCard("card")).toBeNull();
+  client.retryRestore(); complete(socket, bootstrap(2, true));
+  expect(client.getSnapshot().pendingAction).toBeNull();
+
+  const secondId = client.playCard("card")!;
+  const second = socket.sent.at(-1)!;
+  socket.disconnect();
+  expect(client.getSnapshot().pendingAction).toMatchObject({ requestId: secondId, status: "unknown" });
+  socket.connect();
+  second.ack?.({ requestId: secondId, stateVersion: 3 });
+  expect(client.getSnapshot().pendingAction?.status).toBe("unknown");
+  complete(socket, bootstrap(3, true));
+  expect(client.getSnapshot().pendingAction).toBeNull();
+  expect(socket.sent.filter(item => item.event === "turn:play-card")).toHaveLength(1);
+  expect(firstId).not.toBe(secondId);
 });

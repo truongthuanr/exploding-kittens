@@ -50,9 +50,27 @@ test("three players create, join, ready, start, and restore into the game bounda
     await expect(pages[1].getByRole("button", { name: "Start game" })).toHaveCount(0);
     await expect(pages[0].getByRole("button", { name: "Start game" })).toBeEnabled();
     await pages[0].getByRole("button", { name: "Start game" }).click();
-    for (const page of pages) await expect(page.getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+    for (const page of pages) {
+      await expect(page.getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Bài trên tay bạn" })).toBeVisible();
+      await expect(page.locator(".game-player")).toHaveCount(3);
+      await expect(page.locator(".hand-card").first()).toBeVisible();
+      await expect(page.locator(".public-action-log-list li")).toHaveCount(1);
+    }
+    await expect(pages[0].getByText("Đến lượt bạn.")).toBeVisible();
+    await expect(pages[1].getByText("Đang đến lượt Host.")).toBeVisible();
     await pages[0].reload();
     await expect(pages[0].getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+    await expect(pages[0].locator(".hand-card").first()).toBeVisible();
+    await expect(pages[0].getByRole("button", { name: "Rút bài" })).toBeEnabled();
+    await pages[0].getByRole("button", { name: "Rút bài" }).click();
+    await expect(pages[1].getByText("Đến lượt bạn.")).toBeVisible();
+    await expect(pages[1].locator(".public-action-log-list li")).toHaveCount(2);
+    await pages[1].reload();
+    await expect(pages[1].locator(".public-action-log-list li")).toHaveCount(2);
+    await expect(pages[0].getByRole("button", { name: "Rút bài" })).toBeDisabled();
+    await pages[0].setViewportSize({ width: 375, height: 812 });
+    expect(await pages[0].evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(await pages[0].evaluate(() => localStorage.getItem("boardgame.identity.v1"))).not.toContain("hand");
     expect(errors).toEqual([]);
   } finally { await Promise.all(contexts.map(context => context.close())); }
@@ -180,4 +198,116 @@ test("Home and Lobby fit mobile and desktop and expose keyboard focus", async ({
     });
   });
   for (const item of contrasts) expect(item.ratio, item.selector).toBeGreaterThanOrEqual(4.5);
+});
+
+test("three players finish a deterministic match and restore the result", async ({ browser }) => {
+  test.setTimeout(180_000);
+  const contexts = await Promise.all([browser.newContext(), browser.newContext(), browser.newContext()]);
+  try {
+    const pages = await Promise.all(contexts.map(context => context.newPage()));
+    const code = await create(pages[0], "Host");
+    await join(pages[1], "Bob", code);
+    await join(pages[2], "Cat", code);
+    for (const page of pages) await page.getByRole("button", { name: "Ready", exact: true }).click();
+    await pages[0].getByRole("button", { name: "Start game" }).click();
+    for (const page of pages) await expect(page.getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+    await expect(pages[0].locator(".hand-cards")).not.toContainText("Tấn công");
+    await expect(pages[1].locator(".hand-cards")).toContainText("Tấn công");
+    expect(await pages[0].evaluate(() => localStorage.getItem("boardgame.identity.v1"))).not.toContain("hand");
+
+    for (const width of [320, 375, 1280]) {
+      await pages[0].setViewportSize({ width, height: 800 });
+      expect(await pages[0].evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    }
+    const skipButton = pages[0].getByRole("button", { name: "Đánh Bỏ lượt" }).first();
+    await skipButton.focus();
+    await pages[0].keyboard.press("Tab");
+    await pages[0].keyboard.press("Shift+Tab");
+    await expect(skipButton).toBeFocused();
+    expect(await skipButton.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe("none");
+
+    // The test server deals a Skip to Host. Verify a played card before drawing.
+    await pages[0].getByRole("button", { name: "Đánh Bỏ lượt" }).first().click();
+    await expect(pages[1].getByText("Đến lượt bạn.")).toBeVisible();
+    await expect(pages[2].locator(".public-action-log-list li")).toHaveCount(2);
+
+    // Block bootstrap during a reload: recovery must hide the private hand and controls.
+    await pages[1].route("**/socket.io/**", route => route.abort());
+    await pages[1].reload();
+    await expect(pages[1].getByRole("heading", { name: /Đang khôi phục phiên|Không khôi phục được phiên/ })).toBeVisible();
+    await expect(pages[1].getByRole("heading", { name: "Bài trên tay bạn" })).toHaveCount(0);
+    await expect(pages[1].getByRole("button", { name: "Rút bài" })).toHaveCount(0);
+    await pages[1].unroute("**/socket.io/**");
+    await pages[1].reload();
+    await expect(pages[1].getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+    await expect(pages[1].locator(".public-action-log-list li")).toHaveCount(2);
+    await expect(pages[1].locator(".hand-card")).toHaveCount(5);
+
+    let checkedFavorKeyboard = false;
+    for (let draw = 0; draw < 100; draw++) {
+      if (await pages[0].getByRole("heading", { name: "Trận đấu đã kết thúc" }).isVisible()) break;
+      let active: Page | undefined;
+      for (const page of pages) {
+        if (await page.getByText("Đến lượt bạn.", { exact: true }).isVisible()) {
+          active = page;
+          break;
+        }
+      }
+      expect(active, `active player before draw ${draw + 1}`).toBeDefined();
+      const favorButton = active!.getByRole("button", { name: "Đánh Xin bài" }).first();
+      if (!checkedFavorKeyboard && await favorButton.isVisible() && await favorButton.isEnabled()) {
+        await favorButton.click();
+        await expect(active!.getByRole("radio", { name: /\d+ lá/ }).first()).toBeFocused();
+        await active!.getByRole("button", { name: "Hủy" }).click();
+        await expect(favorButton).toBeFocused();
+        checkedFavorKeyboard = true;
+      }
+      const lastVersion = Number(await active!.locator(".public-action-log-list li").last().getAttribute("data-state-version"));
+      const drawButton = active!.getByRole("button", { name: "Rút bài" });
+      await expect(drawButton).toBeEnabled();
+      await drawButton.click();
+      await expect.poll(async () => {
+        const item = active!.locator(".public-action-log-list li").last();
+        return Number(await item.getAttribute("data-state-version"));
+      }).toBeGreaterThan(lastVersion);
+    }
+    expect(checkedFavorKeyboard).toBe(true);
+    for (const page of pages) {
+      await expect(page.getByRole("heading", { name: "Trận đấu đã kết thúc" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Kết quả người chơi" })).toBeVisible();
+      await expect(page.locator(".final-player")).toHaveCount(3);
+      for (const width of [320, 375, 1280]) {
+        await page.setViewportSize({ width, height: 800 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      }
+      expect(await page.locator(".public-action-log-list li").count()).toBeLessThanOrEqual(50);
+      await page.reload();
+      await expect(page.getByRole("heading", { name: "Trận đấu đã kết thúc" })).toBeVisible();
+      await expect(page.locator(".final-player")).toHaveCount(3);
+    }
+  } finally { await Promise.all(contexts.map(context => context.close())); }
+});
+
+test("a delayed draw error keeps controls locked, then permits a valid retry", async ({ browser }) => {
+  const contexts = await Promise.all([browser.newContext(), browser.newContext(), browser.newContext()]);
+  try {
+    const pages = await Promise.all(contexts.map(context => context.newPage()));
+    const code = await create(pages[0], "ErrorHost");
+    await join(pages[1], "Bob", code);
+    await join(pages[2], "Cat", code);
+    for (const page of pages) await page.getByRole("button", { name: "Ready", exact: true }).click();
+    await pages[0].getByRole("button", { name: "Start game" }).click();
+    const actions = pages[0].locator(".game-actions");
+    const drawButton = actions.getByRole("button", { name: "Rút bài" });
+    await expect(drawButton).toBeEnabled();
+    await drawButton.click();
+    await expect(actions.getByRole("status")).toContainText("Đang chờ máy chủ xác nhận");
+    await expect(drawButton).toBeDisabled();
+    await expect(actions.getByRole("alert")).toContainText("Không thể thực hiện thao tác ở giai đoạn hiện tại.");
+    await expect(drawButton).toBeEnabled();
+    await expect(pages[0].locator(".public-action-log-list li")).toHaveCount(1);
+    await drawButton.click();
+    await expect(pages[0].locator(".public-action-log-list li")).toHaveCount(2);
+    await expect(actions.getByRole("alert")).toHaveCount(0);
+  } finally { await Promise.all(contexts.map(context => context.close())); }
 });

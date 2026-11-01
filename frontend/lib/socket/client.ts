@@ -1,12 +1,18 @@
 import { io, type Socket } from "socket.io-client";
 import type {
-  BootstrapResponse, ClientToServerEvents, ErrorEvent, PlayerPrivateStateEvent,
+  BootstrapResponse, ClientToServerEvents, ErrorEvent, GameActionAck, PlayerPrivateStateEvent,
   PublicGameStateEvent, RoomUpdatedEvent, ServerToClientEvents, SystemConnectedEvent,
 } from "../../../shared/contracts";
 import { IDENTITY_KEY, INSTANCE_KEY, PENDING_KEY, SessionStorage, type Identity, type PendingAdmission } from "./storage";
 
 export type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 export type SessionStatus = "none" | "joining" | "join_failed" | "ready" | "restoring" | "restore_failed" | "invalid" | "replaced";
+export type PendingGameAction = {
+  requestId: string;
+  kind: "play-card" | "draw-card";
+  status: "pending" | "unknown";
+  confirmedStateVersion: number | null;
+};
 export type RealtimeState = {
   connection: "disconnected" | "connecting" | "connected" | "reconnecting";
   session: SessionStatus;
@@ -20,15 +26,24 @@ export type RealtimeState = {
   outcome: "known" | "unknown" | null;
   storageDegraded: boolean;
   pendingAdmission: boolean;
+  pendingAction: PendingGameAction | null;
   lastEvent: string | null;
 };
 export const EMPTY_STATE: RealtimeState = {
   connection: "disconnected", session: "none", identity: null, room: null, game: null, private: null,
   syncing: false, error: null, connectionError: null, outcome: null, storageDegraded: false,
-  pendingAdmission: false, lastEvent: null,
+  pendingAdmission: false, pendingAction: null, lastEvent: null,
 };
 type Pair = { game?: PublicGameStateEvent; private?: PlayerPrivateStateEvent };
 type Operation = { id: string; generation: number; kind: "join" | "restore"; timer: ReturnType<typeof setTimeout> };
+type ActionOperation = {
+  id: string;
+  kind: PendingGameAction["kind"];
+  status: PendingGameAction["status"];
+  confirmedVersion: number | null;
+  restored: boolean;
+  timer: ReturnType<typeof setTimeout>;
+};
 
 export function validBootstrap(value: unknown): value is BootstrapResponse {
   if (!value || typeof value !== "object") return false;
@@ -57,6 +72,7 @@ export class RealtimeClient {
   private pairs = new Map<number, Pair>();
   private queuedRoom: RoomUpdatedEvent | null = null;
   private actionIds = new Set<string>();
+  private action?: ActionOperation;
   private takeoverOnConnect = false;
 
   constructor(readonly socket: GameSocket, private storage: SessionStorage, private timeoutMs = 10_000) {
@@ -83,6 +99,7 @@ export class RealtimeClient {
       ...(kind ? { session: kind === "join" ? "join_failed" as const : "restore_failed" as const } : {}) });
   }
   private begin(id: string, kind: "join" | "restore") {
+    if (kind === "restore" && this.action) this.markActionUnknown();
     this.cancel();
     const generation = this.generation;
     this.operation = { id, kind, generation, timer: setTimeout(() => {
@@ -106,6 +123,7 @@ export class RealtimeClient {
     };
     const disconnected = () => {
       const kind = this.operation?.kind;
+      if (this.action) this.markActionUnknown();
       this.cancel(); this.hello = undefined;
       this.update({ connection: "disconnected", syncing: true,
         ...(this.state.session !== "replaced" ? { session: kind === "join" ? "join_failed" as const :
@@ -135,7 +153,7 @@ export class RealtimeClient {
     this.socket.connect();
   }
   stop() {
-    this.cancel(); this.running = false;
+    this.cancel(); this.clearAction(); this.running = false;
     this.cleanup.splice(0).forEach(fn => fn());
     this.socket.disconnect(); this.hello = undefined;
     this.update({ connection: "disconnected" });
@@ -161,6 +179,7 @@ export class RealtimeClient {
     }
     for (const version of this.pairs.keys()) if (version <= (game?.stateVersion ?? -1)) this.pairs.delete(version);
     this.update({ game, private: privateState, syncing: this.pairs.size > 0 });
+    this.reconcileAction();
   }
   private accept(value: BootstrapResponse | null | undefined, generation: number, attemptId?: string) {
     const op = this.operation;
@@ -175,6 +194,7 @@ export class RealtimeClient {
     }
     this.storage.write(IDENTITY_KEY, identity);
     if (op.kind === "join") { this.pending = null; this.storage.remove(PENDING_KEY); }
+    if (op.kind === "restore" && this.action?.status === "unknown") this.action.restored = true;
     this.cancel();
     this.update({ identity, room: value.room, game: value.game, private: value.private,
       session: "ready", syncing: false, pendingAdmission: !!this.pending, error: null, outcome: "known" });
@@ -189,15 +209,19 @@ export class RealtimeClient {
       if (error.code === "session_in_use") { this.replaced(error.message); return; }
       if (error.code === "invalid_session") {
         if (this.state.identity) this.storage.clearIdentity(this.state.identity.playerSessionId);
-        this.cancel(); this.pairs.clear();
+        this.cancel(); this.pairs.clear(); this.clearAction();
         this.update({ identity: null, room: null, game: null, private: null, session: "invalid", error, syncing: false }); return;
       }
       this.fail(error.code, error.message, op.kind); return;
     }
+    if (error.requestId && this.action?.id === error.requestId) {
+      if (!this.operation) this.clearAction({ error, outcome: "known" });
+      return;
+    }
     if (!error.requestId || this.actionIds.has(error.requestId)) this.update({ error });
   }
   private replaced(message: string) {
-    this.cancel(); this.pairs.clear();
+    this.cancel(); this.pairs.clear(); this.clearAction();
     this.socket.io.reconnection(false);
     this.update({ session: "replaced", private: null, game: null, room: null, syncing: true,
       error: { code: "session_in_use", message }, outcome: "known" });
@@ -281,11 +305,93 @@ export class RealtimeClient {
     if (this.actionIds.size > 100) this.actionIds.delete(this.actionIds.values().next().value!);
     return id;
   }
+  private actionView(action: ActionOperation): PendingGameAction {
+    return { requestId: action.id, kind: action.kind, status: action.status,
+      confirmedStateVersion: action.confirmedVersion };
+  }
+  private clearAction(patch: Partial<RealtimeState> = {}) {
+    const action = this.action;
+    if (!action) return;
+    clearTimeout(action.timer);
+    this.actionIds.delete(action.id);
+    this.action = undefined;
+    this.update({ pendingAction: null, ...patch });
+  }
+  private markActionUnknown(code = "action_outcome_unknown") {
+    const action = this.action;
+    if (!action || action.status === "unknown") return;
+    clearTimeout(action.timer);
+    action.status = "unknown";
+    action.restored = false;
+    this.update({ pendingAction: this.actionView(action), outcome: "unknown",
+      error: { code, message: "Action outcome is unknown; restore the session before acting again", requestId: action.id } });
+  }
+  private beginAction(kind: PendingGameAction["kind"]): ActionOperation {
+    const id = this.requestId();
+    const action: ActionOperation = {
+      id, kind, status: "pending", confirmedVersion: null, restored: false,
+      timer: setTimeout(() => {
+        if (this.action === action) this.markActionUnknown();
+      }, this.timeoutMs),
+    };
+    this.action = action;
+    this.update({ pendingAction: this.actionView(action), error: null, outcome: null });
+    return action;
+  }
+  private receiveActionAck(action: ActionOperation, ack?: GameActionAck | null) {
+    if (this.action !== action || action.status !== "pending" || this.operation || !this.socket.connected) return;
+    // A failed handler may send a correlated error and an empty Socket.IO ack.
+    if (ack == null) return;
+    if (ack.requestId !== action.id || !Number.isSafeInteger(ack.stateVersion) || ack.stateVersion < 0) {
+      this.markActionUnknown("invalid_action_ack");
+      return;
+    }
+    action.confirmedVersion = ack.stateVersion;
+    this.update({ pendingAction: this.actionView(action) });
+    this.reconcileAction();
+  }
+  private hasCurrentActionPair(minimumVersion: number): boolean {
+    const { identity, room, game, private: privateState, syncing } = this.state;
+    return !syncing && !!identity && !!room && !!game && !!privateState &&
+      room.roomId === identity.roomId && game.roomId === identity.roomId &&
+      privateState.playerId === identity.playerId &&
+      game.stateVersion === privateState.stateVersion &&
+      game.stateVersion >= room.stateVersion && game.stateVersion >= minimumVersion;
+  }
+  private reconcileAction() {
+    const action = this.action;
+    if (!action || this.state.session !== "ready") return;
+    if (action.status === "pending" && action.confirmedVersion !== null &&
+        this.hasCurrentActionPair(action.confirmedVersion)) {
+      this.clearAction({ error: null, outcome: "known" });
+    } else if (action.status === "unknown" && action.restored &&
+               this.hasCurrentActionPair(0)) {
+      this.clearAction({ error: null, outcome: "known" });
+    }
+  }
+  private canSendGameAction() {
+    if (this.action) return false;
+    if (!this.canAct()) return false;
+    if (this.state.room?.status === "in_game" && this.hasCurrentActionPair(0)) return true;
+    this.update({ error: { code: "not_ready", message: "Wait for the current game state" } });
+    return false;
+  }
   ready = (isReady: boolean) => { if (this.canAct()) this.socket.emit("room:ready", { isReady }); };
   startGame = () => { if (this.canAct()) this.socket.emit("game:start", { requestId: this.requestId() }); };
-  drawCard = () => { if (this.canAct()) this.socket.emit("turn:draw-card", { requestId: this.requestId() }); };
-  playCard = (cardId: string, targetPlayerId?: string) => {
-    if (this.canAct()) this.socket.emit("turn:play-card", { cardId, requestId: this.requestId(), ...(targetPlayerId ? { targetPlayerId } : {}) });
+  drawCard = (): string | null => {
+    if (!this.canSendGameAction()) return null;
+    const action = this.beginAction("draw-card");
+    this.socket.emit("turn:draw-card", { requestId: action.id },
+      ack => this.receiveActionAck(action, ack));
+    return action.id;
+  };
+  playCard = (cardId: string, targetPlayerId?: string): string | null => {
+    if (!this.canSendGameAction()) return null;
+    const action = this.beginAction("play-card");
+    this.socket.emit("turn:play-card",
+      { cardId, requestId: action.id, ...(targetPlayerId ? { targetPlayerId } : {}) },
+      ack => this.receiveActionAck(action, ack));
+    return action.id;
   };
 }
 
