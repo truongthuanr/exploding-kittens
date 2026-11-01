@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { CardType, GamePhase, PlayerStatus } from "../../shared/contracts";
 import type { RealtimeClient, RealtimeState } from "../lib/socket/client";
 import { describeRealtimeError } from "../lib/socket/error-messages";
+import { PublicActionLog } from "./public-action-log";
 import {
   GAME_ACTION_BLOCKER_TEXT, hasCurrentGamePair, selectCurrentPlayer, selectGameActions,
   selectIsEliminated, selectIsOwnTurn,
@@ -180,5 +181,6 @@ export function GameBoard({ state, client }: { state: RealtimeState; client: Rea
         : <ol className="future-cards">{privateState.visibleFutureCards.map((cardType, index) =>
           <li key={index}>{cardNames[cardType]}</li>)}</ol>}
     </section>}
+    <PublicActionLog game={game} />
   </section>;
 }

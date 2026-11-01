@@ -53,7 +53,7 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 ### 4. Public game log
 - [x] Add `actionHistory` to the shared TypeScript contract and matching backend response model as the latest 50 public entries, ordered by `stateVersion`; include it in normal game state and reconnect/bootstrap snapshots.
 - [x] Append one entry after each successful start/play/draw resolution and before broadcasting its state. Use `stateVersion` as the entry ID, retain `recentAction` as the latest entry, and reset history for a new match.
-- [ ] Keep private cards, deck order, and Favor's transferred card type out of public summaries. Render player names and final outcomes, label the list as the 50 most recent actions, and show a sensible empty state.
+- [x] Keep private cards, deck order, and Favor's transferred card type out of public summaries. Render player names and final outcomes, label the list as the 50 most recent actions, and show a sensible empty state.
 
 ### 5. Elimination and result
 - [ ] Show elimination in the board/player list from authoritative public state, including the local player's read-only state.

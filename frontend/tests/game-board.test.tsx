@@ -44,6 +44,7 @@ describe("GameBoard", () => {
   it("shows the public board and only the local private hand and future cards", () => {
     const html = renderToStaticMarkup(<GameBoard state={state} client={null} />);
     expect(html).toContain("Trận đấu đã bắt đầu");
+    expect(html).toContain("50 hành động gần nhất");
     expect(html).toContain("Lượt 3");
     expect(html).toContain("Lượt cần rút");
     expect(html).toContain(">2</dd>");

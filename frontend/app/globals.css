@@ -81,3 +81,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .favor-picker legend { font-weight: 700; padding: 0 6px; }
 .favor-picker label { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-weight: 500; }
 .favor-picker input { width: 18px; height: 18px; margin: 0; accent-color: #144e68; }
+
+.public-action-log { border-top: 1px solid #d8e0e5; padding-top: 20px; min-width: 0; }
+.public-action-log h2 { font-size: 1.15rem; margin: 0 0 8px; }
+.public-action-log > .helper { margin: 0 0 12px; }
+.public-action-log-list { display: grid; gap: 8px; margin: 0; padding-left: 1.5rem; }
+.public-action-log-list li { padding: 9px 12px; border: 1px solid #d8e0e5; border-radius: 8px; overflow-wrap: anywhere; }

@@ -55,6 +55,7 @@ test("three players create, join, ready, start, and restore into the game bounda
       await expect(page.getByRole("heading", { name: "Bài trên tay bạn" })).toBeVisible();
       await expect(page.locator(".game-player")).toHaveCount(3);
       await expect(page.locator(".hand-card").first()).toBeVisible();
+      await expect(page.locator(".public-action-log-list li")).toHaveCount(1);
     }
     await expect(pages[0].getByText("Đến lượt bạn.")).toBeVisible();
     await expect(pages[1].getByText("Đang đến lượt Host.")).toBeVisible();
@@ -64,6 +65,9 @@ test("three players create, join, ready, start, and restore into the game bounda
     await expect(pages[0].getByRole("button", { name: "Rút bài" })).toBeEnabled();
     await pages[0].getByRole("button", { name: "Rút bài" }).click();
     await expect(pages[1].getByText("Đến lượt bạn.")).toBeVisible();
+    await expect(pages[1].locator(".public-action-log-list li")).toHaveCount(2);
+    await pages[1].reload();
+    await expect(pages[1].locator(".public-action-log-list li")).toHaveCount(2);
     await expect(pages[0].getByRole("button", { name: "Rút bài" })).toBeDisabled();
     await pages[0].setViewportSize({ width: 375, height: 812 });
     expect(await pages[0].evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
