@@ -167,6 +167,7 @@ export function selectRoomView(state: RealtimeState): RoomView {
   if (state.session === "none" || state.session === "restoring") return "restoring";
   if (state.session === "restore_failed") return "restore_failed";
   if (state.session !== "ready" || !hasUsableRoom(state)) return "safe_recovery";
+  if (state.connection !== "connected" && state.room!.status !== "waiting") return "restoring";
 
   if (state.room!.status === "waiting") return "lobby";
   if (state.room!.status === "in_game" || state.room!.status === "finished") {

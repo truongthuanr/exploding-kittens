@@ -50,9 +50,19 @@ test("three players create, join, ready, start, and restore into the game bounda
     await expect(pages[1].getByRole("button", { name: "Start game" })).toHaveCount(0);
     await expect(pages[0].getByRole("button", { name: "Start game" })).toBeEnabled();
     await pages[0].getByRole("button", { name: "Start game" }).click();
-    for (const page of pages) await expect(page.getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+    for (const page of pages) {
+      await expect(page.getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Bài trên tay bạn" })).toBeVisible();
+      await expect(page.locator(".game-player")).toHaveCount(3);
+      await expect(page.locator(".hand-card").first()).toBeVisible();
+    }
+    await expect(pages[0].getByText("Đến lượt bạn.")).toBeVisible();
+    await expect(pages[1].getByText("Đang đến lượt Host.")).toBeVisible();
     await pages[0].reload();
     await expect(pages[0].getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+    await expect(pages[0].locator(".hand-card").first()).toBeVisible();
+    await pages[0].setViewportSize({ width: 375, height: 812 });
+    expect(await pages[0].evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(await pages[0].evaluate(() => localStorage.getItem("boardgame.identity.v1"))).not.toContain("hand");
     expect(errors).toEqual([]);
   } finally { await Promise.all(contexts.map(context => context.close())); }

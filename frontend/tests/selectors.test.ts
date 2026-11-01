@@ -85,6 +85,7 @@ describe("selectRoomView", () => {
     expect(selectRoomView({ ...state, private: { ...state.private!, playerId: "other" } })).toBe("game_loading");
     expect(selectRoomView(inGame(2, 3))).toBe("game");
     expect(selectRoomView({ ...inGame(), syncing: true })).toBe("game_loading");
+    expect(selectRoomView({ ...inGame(), connection: "disconnected" })).toBe("restoring");
   });
 
   it("waits for a current finished pair before showing Finished", () => {

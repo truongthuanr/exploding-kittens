@@ -29,16 +29,16 @@ Implement the in-match UI needed to play a full multiplayer round in the browser
 ### 1. State selectors and action availability
 - [x] Add pure selectors for the current player, local player, own turn, eliminated state, playable cards, valid Favor targets, and draw availability.
 - [x] Require a connected socket, ready session, synchronized current public/private state, `in_game` room, `phase === "turn_action"`, and the local player's turn before enabling actions. Keep server validation authoritative.
-- [ ] Do not offer `exploding_kitten` or `defuse` as normal playable hand actions. Show why an action is unavailable without relying on color alone.
+- [x] Do not offer `exploding_kitten` or `defuse` as normal playable hand actions. Show why an action is unavailable without relying on color alone.
 - [x] Allow one in-flight game action per tab. Match success to the submitted `requestId` and apply the paired snapshot at or above its confirmed `stateVersion` before releasing the pending state; clear a failed action only on its correlated error.
 
 ### 2. Game board and player information
-- [ ] Replace the Game placeholder with the current turn, turn number, `pendingDraws`, phase, and a clear indication of whose turn it is.
-- [ ] Render every public player with nickname, hand count, connection/elimination status, and a clear marker for the local player/current player.
-- [ ] Render the local private hand using `cardId` as the action identifier and `cardType` for the card label. Never render another player's private hand or hidden deck order.
-- [ ] Render discard top card and discard count from the public snapshot.
-- [ ] Show `visibleFutureCards` only to the local player when present, and update or clear them when a newer private snapshot arrives.
-- [ ] Keep the board readable but non-interactive for eliminated players with a ready session. During disconnect/restore, show the blocking Recovery view and hide the board/private hand until a synchronized bootstrap is applied.
+- [x] Replace the Game placeholder with the current turn, turn number, `pendingDraws`, phase, and a clear indication of whose turn it is.
+- [x] Render every public player with nickname, hand count, connection/elimination status, and a clear marker for the local player/current player.
+- [x] Render the local private hand using `cardId` as the action identifier and `cardType` for the card label. Never render another player's private hand or hidden deck order.
+- [x] Render discard top card and discard count from the public snapshot.
+- [x] Show `visibleFutureCards` only to the local player when present, and update or clear them when a newer private snapshot arrives.
+- [x] Keep the board readable but non-interactive for eliminated players with a ready session. During disconnect/restore, show the blocking Recovery view and hide the board/private hand until a synchronized bootstrap is applied.
 
 ### 3. Play and draw flows
 - [ ] Provide a play control for Skip, Attack, Shuffle, See the Future, and Favor cards that are currently available to the local player.
