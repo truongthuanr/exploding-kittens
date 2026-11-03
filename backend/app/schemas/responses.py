@@ -74,6 +74,18 @@ class GameActionAck(SocketResponseModel):
     stateVersion: int
 
 
+class RematchVoteAck(SocketResponseModel):
+    requestId: str
+    stateVersion: int
+    choice: Literal["ready", "withdrawn"]
+
+
+class LeaveRoomAck(SocketResponseModel):
+    requestId: str
+    roomId: str
+    status: Literal["room_left"] = "room_left"
+
+
 class PublicGameStateEvent(SocketResponseModel):
     stateVersion: int = 0
     roomId: str

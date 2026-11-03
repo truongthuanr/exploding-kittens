@@ -65,6 +65,18 @@ export type GameActionAck = {
   stateVersion: number;
 };
 
+export type RematchVoteAck = {
+  requestId: string;
+  stateVersion: number;
+  choice: "ready" | "withdrawn";
+};
+
+export type LeaveRoomAck = {
+  requestId: string;
+  roomId: string;
+  status: "room_left";
+};
+
 export type PublicGameStateEvent = {
   stateVersion: number;
   roomId: string;

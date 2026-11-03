@@ -15,6 +15,19 @@ export type RoomReadyRequest = {
   isReady: boolean;
 };
 
+export type RematchReadyRequest = {
+  requestId: string;
+};
+
+export type RematchWithdrawRequest = {
+  requestId: string;
+};
+
+export type LeaveRoomRequest = {
+  playerSessionId: string;
+  requestId: string;
+};
+
 export type GameStartRequest = {
   requestId?: string;
 };
