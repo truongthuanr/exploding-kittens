@@ -20,6 +20,8 @@ export type RoomPlayer = {
   isReady: boolean;
   isHost: boolean;
   status: PlayerStatus;
+  rematchReady: boolean;
+  rematchGraceDeadlineMs: number | null;
 };
 
 export type RoomUpdatedEvent = {

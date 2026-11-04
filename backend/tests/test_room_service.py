@@ -228,6 +228,8 @@ def test_mapper_converts_room_state_to_room_updated_event() -> None:
             "isReady": True,
             "isHost": True,
             "status": PlayerStatus.CONNECTED,
+            "rematchReady": False,
+            "rematchGraceDeadlineMs": None,
         },
         {
             "playerId": "player-2",
@@ -235,6 +237,8 @@ def test_mapper_converts_room_state_to_room_updated_event() -> None:
             "isReady": False,
             "isHost": False,
             "status": PlayerStatus.DISCONNECTED,
+            "rematchReady": False,
+            "rematchGraceDeadlineMs": None,
         },
     ]
 

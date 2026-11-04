@@ -44,6 +44,12 @@ class RoomNotWaitingError(RoomError):
         self.room_id = room_id
 
 
+class RoomNotFinishedError(RoomError):
+    def __init__(self, room_id: str) -> None:
+        super().__init__(f"Room is not finished: {room_id}")
+        self.room_id = room_id
+
+
 class PlayerNotInRoomError(RoomError):
     def __init__(self, player_id: str, room_id: str) -> None:
         super().__init__(f"Player {player_id} is not in room {room_id}")

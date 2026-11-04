@@ -9,9 +9,9 @@ import type { PlayerPrivateStateEvent, PublicGameStateEvent, RoomUpdatedEvent } 
 
 const identity = { version: 1 as const, roomId: "room", roomCode: "ROOM01", playerId: "self", playerSessionId: "session" };
 const players: RoomUpdatedEvent["players"] = [
-  { playerId: "self", nickname: "Alice", isReady: true, isHost: true, status: "connected" },
-  { playerId: "b", nickname: "Bob", isReady: true, isHost: false, status: "connected" },
-  { playerId: "c", nickname: "Cat", isReady: true, isHost: false, status: "connected" },
+  { playerId: "self", nickname: "Alice", isReady: true, isHost: true, status: "connected", rematchReady: false, rematchGraceDeadlineMs: null },
+  { playerId: "b", nickname: "Bob", isReady: true, isHost: false, status: "connected", rematchReady: false, rematchGraceDeadlineMs: null },
+  { playerId: "c", nickname: "Cat", isReady: true, isHost: false, status: "connected", rematchReady: false, rematchGraceDeadlineMs: null },
 ];
 
 function waiting(overrides: Partial<RealtimeState> = {}): RealtimeState {

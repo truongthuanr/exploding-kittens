@@ -29,6 +29,8 @@ class RoomPlayer(SocketResponseModel):
     isReady: bool
     isHost: bool
     status: PlayerStatus
+    rematchReady: bool = False
+    rematchGraceDeadlineMs: int | None = None
 
 
 class RoomUpdatedEvent(SocketResponseModel):

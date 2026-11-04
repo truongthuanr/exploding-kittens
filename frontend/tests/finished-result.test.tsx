@@ -11,9 +11,9 @@ const finished: RealtimeState = {
   room: {
     roomId: "room", roomCode: "ROOM01", status: "finished", stateVersion: 8,
     players: [
-      { playerId: "alice", nickname: "Alice", isReady: true, isHost: true, status: "eliminated" },
-      { playerId: "bob", nickname: "Bob", isReady: true, isHost: false, status: "connected" },
-      { playerId: "cat", nickname: "Cat", isReady: true, isHost: false, status: "eliminated" },
+      { playerId: "alice", nickname: "Alice", isReady: true, isHost: true, status: "eliminated", rematchReady: false, rematchGraceDeadlineMs: null },
+      { playerId: "bob", nickname: "Bob", isReady: true, isHost: false, status: "connected", rematchReady: false, rematchGraceDeadlineMs: null },
+      { playerId: "cat", nickname: "Cat", isReady: true, isHost: false, status: "eliminated", rematchReady: false, rematchGraceDeadlineMs: null },
     ],
   },
   game: {

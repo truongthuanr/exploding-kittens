@@ -15,6 +15,8 @@ def to_room_updated_event(room: RoomState) -> RoomUpdatedEvent:
                 isReady=player.is_ready,
                 isHost=room.is_host_player(player.player_id),
                 status=player.status,
+                rematchReady=player.rematch_ready,
+                rematchGraceDeadlineMs=player.rematch_grace_deadline_ms,
             )
             for player in room.players
         ],
