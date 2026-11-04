@@ -25,6 +25,7 @@ export type LobbyBlocker =
   | "player_missing"
   | "ready_pending"
   | "start_pending"
+  | "post_game_pending"
   | "not_host"
   | "player_count"
   | "players_not_ready"
@@ -123,7 +124,7 @@ export type FinishedResult = {
 export function selectFinishedResult(state: RealtimeState): FinishedResult | null {
   if (selectRoomView(state) !== "finished") return null;
   const game = state.game!;
-  const localPlayer = selectLocalPlayer(state);
+  const localPlayer = game.players.find(player => player.playerId === state.identity?.playerId);
   if (!localPlayer) return null;
   const winner = game.winnerPlayerId
     ? game.players.find(player => player.playerId === game.winnerPlayerId) ?? null
@@ -192,6 +193,14 @@ export function selectRoomView(state: RealtimeState): RoomView {
   if (state.connection !== "connected" && state.room!.status !== "waiting") return "restoring";
 
   if (state.room!.status === "waiting") return "lobby";
+  // Keep the final result visible while a newer finished-room vote snapshot is pairing.
+  if (state.room!.status === "finished" && state.game?.phase === "finished" &&
+      state.game.roomId === state.identity.roomId && state.private?.playerId === state.identity.playerId &&
+      state.game.stateVersion === state.private.stateVersion &&
+      state.game.players.some(player => player.playerId === state.identity!.playerId) &&
+      (!state.game.winnerPlayerId || state.game.players.some(player => player.playerId === state.game!.winnerPlayerId))) {
+    return "finished";
+  }
   if (state.room!.status === "in_game" || state.room!.status === "finished") {
     if (state.syncing || !hasCurrentGamePair(state)) return "game_loading";
     if (state.room!.status === "finished" && state.game!.phase !== "finished") return "game_loading";
@@ -212,6 +221,7 @@ function lobbyBlocker(state: RealtimeState): LobbyBlocker | null {
   if (state.connection !== "connected") return "connection_unavailable";
   if (state.session !== "ready") return "session_unavailable";
   if (state.pendingAdmission) return "admission_conflict";
+  if (state.pendingPostGame) return "post_game_pending";
   if (state.syncing) return "synchronizing";
   if (!hasUsableRoom(state)) return "room_unavailable";
   if (state.room!.status !== "waiting") return "room_not_waiting";

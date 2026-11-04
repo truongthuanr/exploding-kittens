@@ -299,3 +299,138 @@ it("clears only the saved room identity after a correlated room-left restore res
   expect(selectRoomView(client.getSnapshot())).toBe("home");
   expect(local.getItem(IDENTITY_KEY)).toBeNull();
 });
+
+function finishedBootstrap(version = 1): BootstrapResponse {
+  const result = bootstrap(version, true);
+  result.room.status = "finished";
+  result.game!.phase = "finished";
+  result.game!.winnerPlayerId = "player";
+  return result;
+}
+function finishRoom(socket: FakeSocket, value: BootstrapResponse) {
+  socket.receive("room:updated", value.room);
+  socket.receive("game:state", value.game);
+  socket.receive("player:private-state", value.private);
+}
+
+it("correlates rematch votes with their ack and authoritative room snapshot", () => {
+  const { client, socket } = setup(true);
+  complete(socket, finishedBootstrap());
+  const id = client.rematchReady()!;
+  expect(id).toBeTruthy();
+  expect(client.rematchReady()).toBeNull();
+  expect(socket.sent.at(-1)).toMatchObject({ event: "room:rematch-ready", data: { requestId: id } });
+  const vote = socket.sent.at(-1)!;
+  vote.ack?.({ requestId: id, stateVersion: 2, choice: "ready" });
+  expect(client.getSnapshot().pendingPostGame?.requestId).toBe(id);
+  const ready = finishedBootstrap(2);
+  ready.room.players[0].rematchReady = true;
+  finishRoom(socket, ready);
+  expect(client.getSnapshot().pendingPostGame).toBeNull();
+  expect(client.getSnapshot().room?.players[0].rematchReady).toBe(true);
+  const withdrawnId = client.rematchWithdraw()!;
+  const withdraw = socket.sent.at(-1)!;
+  expect(withdraw.event).toBe("room:rematch-withdraw");
+  withdraw.ack?.({ requestId: withdrawnId, stateVersion: 3, choice: "withdrawn" });
+  finishRoom(socket, finishedBootstrap(3));
+  expect(client.getSnapshot().pendingPostGame).toBeNull();
+  expect(client.getSnapshot().room?.players[0].rematchReady).toBe(false);
+});
+
+it("restores an unknown vote, then retries with the same request ID", () => {
+  const { client, socket, tab } = setup(true);
+  complete(socket, finishedBootstrap());
+  const id = client.rematchReady()!;
+  vi.advanceTimersByTime(101);
+  expect(client.getSnapshot().pendingPostGame).toMatchObject({ requestId: id, status: "unknown", restored: false });
+  expect(socket.sent.at(-1)?.event).toBe("player:reconnect");
+  complete(socket, finishedBootstrap());
+  expect(client.getSnapshot().pendingPostGame).toMatchObject({ requestId: id, status: "unknown", restored: true });
+  expect(client.rematchWithdraw()).toBeNull();
+  expect(client.retryPostGame()).toBe(id);
+  expect(socket.sent.at(-1)).toMatchObject({ event: "room:rematch-ready", data: { requestId: id } });
+  expect(JSON.parse(tab.getItem("boardgame.post-game.v1")!).requestId).toBe(id);
+});
+
+it("returns to a clean lobby only on the authoritative waiting snapshot", () => {
+  const { client, socket } = setup(true);
+  complete(socket, finishedBootstrap());
+  const id = client.rematchReady()!;
+  const waiting = bootstrap(2);
+  socket.receive("room:updated", waiting.room);
+  expect(client.getSnapshot()).toMatchObject({ room: { status: "waiting" }, game: null, private: null, pendingPostGame: null });
+  expect(selectRoomView(client.getSnapshot())).toBe("lobby");
+  socket.sent.at(-1)?.ack?.({ requestId: id, stateVersion: 2, choice: "ready" });
+  expect(client.getSnapshot().game).toBeNull();
+});
+
+it("clears identity only after a correlated leave ack or room_left restore result", () => {
+  const a = setup(true);
+  complete(a.socket, finishedBootstrap());
+  const id = a.client.leaveRoom()!;
+  expect(a.local.getItem(IDENTITY_KEY)).not.toBeNull();
+  expect(a.client.rematchReady()).toBeNull();
+  a.socket.sent.at(-1)!.ack?.({ requestId: "wrong", roomId: "room", status: "room_left", replayUntilMs: Date.now() + 600000 });
+  expect(a.client.getSnapshot().identity).not.toBeNull();
+  const restore = a.socket.sent.at(-1)!;
+  expect(restore.event).toBe("player:reconnect");
+  restore.ack?.({ status: "room_left", roomId: "room", playerSessionId: "session", attemptId: restore.data.attemptId });
+  expect(a.client.getSnapshot()).toMatchObject({ identity: null, room: null, game: null, private: null, session: "none" });
+  expect(a.local.getItem(IDENTITY_KEY)).toBeNull();
+  expect(selectRoomView(a.client.getSnapshot())).toBe("home");
+
+  const b = setup(true);
+  complete(b.socket, finishedBootstrap());
+  const leave = b.client.leaveRoom()!;
+  b.socket.sent.at(-1)!.ack?.({ requestId: leave, roomId: "room", status: "room_left", replayUntilMs: Date.now() + 600000 });
+  expect(b.client.getSnapshot().identity).toBeNull();
+  expect(b.local.getItem(IDENTITY_KEY)).toBeNull();
+});
+
+it("persists a lost leave request across reload and retries its ID after restore", () => {
+  const a = setup(true);
+  complete(a.socket, finishedBootstrap());
+  const id = a.client.leaveRoom()!;
+  a.client.stop();
+  const saved = JSON.parse(a.tab.getItem("boardgame.post-game.v1")!);
+  expect(saved).toMatchObject({ kind: "leave", requestId: id, roomId: "room", playerSessionId: "session", status: "unknown" });
+  const b = setup(true, a.local, a.tab);
+  expect(b.client.getSnapshot().pendingPostGame?.requestId).toBe(id);
+  complete(b.socket, finishedBootstrap());
+  expect(b.client.getSnapshot().pendingPostGame).toMatchObject({ requestId: id, status: "unknown", restored: true });
+  expect(b.client.rematchReady()).toBeNull();
+  expect(b.client.retryPostGame()).toBe(id);
+  expect(b.socket.sent.at(-1)).toMatchObject({ event: "room:leave", data: { requestId: id, playerSessionId: "session" } });
+  b.socket.receive("error", { code: "invalid_session", message: "expired", requestId: id });
+  expect(b.client.getSnapshot()).toMatchObject({ identity: null, session: "invalid", pendingPostGame: null });
+  expect(a.local.getItem(IDENTITY_KEY)).toBeNull();
+});
+
+it("creates a new leave ID only after replay expiry and a successful restore", () => {
+  const { client, socket } = setup(true);
+  complete(socket, finishedBootstrap());
+  const oldId = client.leaveRoom()!;
+  vi.advanceTimersByTime(101);
+  expect(client.getSnapshot().pendingPostGame).toMatchObject({ requestId: oldId, status: "unknown" });
+  complete(socket, finishedBootstrap());
+  vi.advanceTimersByTime(599900);
+  client.retryRestore();
+  expect(client.retryPostGame()).toBeNull();
+  expect(socket.sent.at(-1)?.event).toBe("player:reconnect");
+  complete(socket, finishedBootstrap());
+  const newId = client.retryPostGame()!;
+  expect(newId).toBeTruthy();
+  expect(newId).not.toBe(oldId);
+  expect(socket.sent.at(-1)).toMatchObject({ event: "room:leave", data: { requestId: newId } });
+});
+
+it("keeps a valid identity after a correlated leave rejection", () => {
+  const { client, socket, local, tab } = setup(true);
+  complete(socket, finishedBootstrap());
+  const id = client.leaveRoom()!;
+  socket.receive("error", { code: "room_not_finished", message: "match changed", requestId: id });
+  expect(client.getSnapshot().pendingPostGame).toBeNull();
+  expect(client.getSnapshot().error?.code).toBe("room_not_finished");
+  expect(local.getItem(IDENTITY_KEY)).not.toBeNull();
+  expect(tab.getItem("boardgame.post-game.v1")).toBeNull();
+});

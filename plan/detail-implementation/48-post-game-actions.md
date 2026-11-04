@@ -5,7 +5,7 @@ Give players a clear next step after a match: play another match with the same r
 ## Context and dependencies
 
 - `18-ui-game-play.md` already renders the authoritative result. Its scope explicitly defers rematch actions.
-- The Finished view currently has no CTA. Shared contracts and backend handlers support rematch voting and leave-room; the Finished UI remains pending.
+- The Finished view now offers rematch voting, vote withdrawal, grace countdowns, and Leave Room through the existing realtime client.
 - `plan/functional-spec.md` requires a finished room to support rematch or leaving. `plan/implementation-plan.md` places rematch in Phase 5.
 - Reuse the existing realtime client, room identity, view selector, and lobby screen. Do not create a second source of room state.
 
@@ -39,21 +39,21 @@ Give players a clear next step after a match: play another match with the same r
 
 ### 2. Realtime client and UI
 
-- [ ] Expose rematch ready/withdraw and leave methods from the existing realtime client. Correlate replies with request IDs and reconcile with authoritative room snapshots; protect against duplicate submissions and unknown outcomes after timeout/disconnect.
-- [ ] Add the Finished-screen CTAs and per-player rematch status. Explain who is still pending, including disconnected members and their grace-period countdown. Show pending, success, error, and restore states accessibly.
-- [ ] Keep the Finished result on screen until an authoritative `waiting` room snapshot arrives. Then select Lobby without exposing stale finished-game data or letting old action controls reappear.
-- [ ] After a leave acknowledgement or `room_left` reconnect result, clear the saved room identity and snapshots and show Home. If the session is `invalid_session`, clear the unusable identity and show Home. On a timeout or lost acknowledgement, restore first; if the session remains valid, offer an explicit same-ID retry while the request is replayable and keep other actions locked until resolved. Once the replay window expires, allow a new request only after a successful restore confirms continued membership.
-- [ ] Support mobile layout, keyboard access, visible focus, and status announcements for the new controls.
+- [x] Expose rematch ready/withdraw and leave methods from the existing realtime client. Correlate replies with request IDs and reconcile with authoritative room snapshots; protect against duplicate submissions and unknown outcomes after timeout/disconnect.
+- [x] Add the Finished-screen CTAs and per-player rematch status. Explain who is still pending, including disconnected members and their grace-period countdown. Show pending, success, error, and restore states accessibly.
+- [x] Keep the Finished result on screen until an authoritative `waiting` room snapshot arrives. Then select Lobby without exposing stale finished-game data or letting old action controls reappear.
+- [x] After a leave acknowledgement or `room_left` reconnect result, clear the saved room identity and snapshots and show Home. If the session is `invalid_session`, clear the unusable identity and show Home. On a timeout or lost acknowledgement, restore first; if the session remains valid, offer an explicit same-ID retry while the request is replayable and keep other actions locked until resolved. Once the replay window expires, allow a new request only after a successful restore confirms continued membership.
+- [x] Support mobile layout, keyboard access, visible focus, and status announcements for the new controls.
 
 ### 3. Verification
 
-- [ ] Test a multiplayer rematch from Finished through voting, Lobby, Ready, and a new match; verify old cards, winner, and action history do not carry over.
-- [ ] Test withdraw, duplicate requests, reload/reconnect during voting, disconnected-member grace expiry/cancellation, and rematch/leave races.
+- [x] Test a multiplayer rematch from Finished through voting, Lobby, Ready, and a new match; verify old cards, winner, and action history do not carry over.
+- [x] Test withdraw, duplicate requests, reload/reconnect during voting, disconnected-member grace expiry/cancellation, and rematch/leave races.
 - [x] Test withdrawal of the final vote cancels pending removals, a later first vote restarts grace periods, and stale timer callbacks cannot remove reconnected members.
-- [ ] Test leaving as a regular player and as host, including deterministic host transfer, the final member leaving, room cleanup, identity cleanup, and the remaining players' view. Verify that a rematch room with fewer than three players accepts new joins but cannot start early.
-- [ ] Test delayed/lost acknowledgements and correlated errors: `room_left` after a committed leave, restore and same-ID retry after an uncommitted leave, result-record expiry, and server restart, without duplicate room transitions or accidental loss of a valid session.
-- [ ] Test rematch request replay after transition to `waiting`, request ID conflicts, and leave retry after reload using the persisted request ID and deadline.
-- [ ] Run relevant backend and frontend tests, typecheck, build, and browser E2E checks for the changed flows.
+- [x] Test leaving as a regular player and as host, including deterministic host transfer, the final member leaving, room cleanup, identity cleanup, and the remaining players' view. Verify that a rematch room with fewer than three players accepts new joins but cannot start early.
+- [x] Test delayed/lost acknowledgements and correlated errors: `room_left` after a committed leave, restore and same-ID retry after an uncommitted leave, result-record expiry, and server restart, without duplicate room transitions or accidental loss of a valid session.
+- [x] Test rematch request replay after transition to `waiting`, request ID conflicts, and leave retry after reload using the persisted request ID and deadline.
+- [x] Run relevant backend and frontend tests, typecheck, build, and browser E2E checks for the changed flows.
 
 ## Done when
 

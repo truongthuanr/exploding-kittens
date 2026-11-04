@@ -49,6 +49,31 @@ describe("FinishedResultView", () => {
     expect(html).not.toContain("Bài trên tay bạn");
   });
 
+  it("shows rematch choices, disconnected grace and recoverable pending leave", () => {
+    const voting: RealtimeState = {
+      ...finished,
+      room: { ...finished.room!, players: finished.room!.players.map(player => player.playerId === "alice"
+        ? { ...player, rematchReady: true }
+        : player.playerId === "cat"
+          ? { ...player, status: "disconnected" as const, rematchGraceDeadlineMs: Date.now() + 120000 }
+          : player) },
+    };
+    const html = renderToStaticMarkup(<FinishedResultView state={voting} />);
+    expect(html).toContain("1 / 3 người chơi đã đồng ý");
+    expect(html).toContain("Rút phiếu Play Again");
+    expect(html).toContain("Leave Room");
+    expect(html).toContain("Mất kết nối");
+    expect(html).toContain("Còn đang tính để quay lại");
+    const unresolved: RealtimeState = { ...voting, pendingPostGame: {
+      kind: "leave", requestId: "leave-id", roomId: "room", playerSessionId: "session",
+      replayUntilServerMs: Date.now() + 600000, status: "unknown", ackVersion: null, restored: true,
+    } };
+    const recovery = renderToStaticMarkup(<FinishedResultView state={unresolved} />);
+    expect(recovery).toContain("Khôi phục phiên");
+    expect(recovery).toContain("Thử lại yêu cầu");
+    expect(recovery).toContain("disabled");
+  });
+
   it("shows local victory from the finished game snapshot", () => {
     const winner: RealtimeState = {
       ...finished,
@@ -93,6 +118,13 @@ describe("FinishedResultView", () => {
       ...staleRoomFirst, lastEvent: "game:ended",
     };
     expect(selectFinishedResult(notificationOnly)).toBeNull();
+    const voteSnapshotPending: RealtimeState = {
+      ...finished, room: { ...finished.room!, stateVersion: 9 }, syncing: true,
+    };
+    expect(selectRoomView(voteSnapshotPending)).toBe("finished");
+    expect(selectFinishedResult(voteSnapshotPending)?.winner?.nickname).toBe("Bob");
+    expect(renderToStaticMarkup(<FinishedResultView state={voteSnapshotPending} />)).toContain("Bạn đã thua.");
+    expect(selectRoomView({ ...voteSnapshotPending, room: { ...finished.room!, status: "waiting" } })).toBe("lobby");
     expect(selectRoomView({ ...finished, session: "restoring" })).toBe("restoring");
     expect(selectRoomView(finished)).toBe("finished");
   });

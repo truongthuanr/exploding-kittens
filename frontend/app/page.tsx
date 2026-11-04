@@ -18,6 +18,7 @@ const reasons: Record<LobbyBlocker, string> = {
   player_missing: "Không tìm thấy người chơi của bạn trong phòng.",
   ready_pending: "Đang chờ cập nhật Ready.",
   start_pending: "Đang chờ máy chủ bắt đầu trận.",
+  post_game_pending: "Đang xác nhận yêu cầu sau trận trước đó.",
   not_host: "Chỉ chủ phòng có thể bắt đầu trận.",
   player_count: "Cần từ 3 đến 5 người chơi.",
   players_not_ready: "Tất cả người chơi cần Ready.",
@@ -167,6 +168,18 @@ function Lobby({ state, client, readOnly }: { state: RealtimeState; client: Real
       <button type="button" onClick={() => client?.retryRestore()}>Thử kết nối lại</button>
     </div>}
     {state.syncing && !readOnly && <p role="status">Đang đồng bộ phòng; các thao tác tạm khóa.</p>}
+    {state.pendingPostGame && <div className="notice" role="status" aria-live="polite">
+      <p>{state.pendingPostGame.status === "pending"
+        ? "Đang xác nhận yêu cầu sau trận trước đó."
+        : "Chưa xác định được yêu cầu sau trận trước đó; các thao tác phòng tạm khóa."}</p>
+      {state.pendingPostGame.status === "unknown" && <div className="button-row">
+        <button type="button" disabled={!client || state.connection !== "connected" || state.session === "restoring"}
+          onClick={() => client?.retryRestore()}>Khôi phục phiên</button>
+        {state.pendingPostGame.restored && <button type="button" className="secondary"
+          disabled={!client || state.connection !== "connected" || state.session !== "ready"}
+          onClick={() => client?.retryPostGame()}>Thử lại yêu cầu</button>}
+      </div>}
+    </div>}
     <ul className="players">
       {room.players.map(player => <li key={player.playerId} className="player">
         <span className="player-name">{player.nickname} {player.playerId === state.identity?.playerId && <span className="badge">Bạn</span>} {player.isHost && <span className="badge">Chủ phòng</span>}</span>
@@ -208,7 +221,7 @@ export default function Page() {
       view === "lobby" || view === "read_only_lobby" ? <Lobby state={state} client={client} readOnly={view === "read_only_lobby"} /> :
       view === "game_loading" ? <section className="panel"><h1 tabIndex={-1}>Đang tải trận đấu</h1><p role="status">Đang đồng bộ trạng thái trận đấu.</p></section> :
       view === "game" ? <GameBoard state={state} client={client} /> :
-      view === "finished" ? <FinishedResultView state={state} /> :
+      view === "finished" ? <FinishedResultView state={state} client={client} /> :
       <Recovery view={view} state={state} client={client} />}
     <StatusMessages state={state} client={client} />
   </main>;
