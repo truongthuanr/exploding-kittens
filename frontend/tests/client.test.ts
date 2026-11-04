@@ -286,3 +286,16 @@ it("disconnect and invalid ack require restore before another action", () => {
   expect(socket.sent.filter(item => item.event === "turn:play-card")).toHaveLength(1);
   expect(firstId).not.toBe(secondId);
 });
+
+it("clears only the saved room identity after a correlated room-left restore result", () => {
+  const local = new Memory();
+  const { client, socket } = setup(true, local);
+  const request = socket.sent.at(-1)!;
+  expect(request.event).toBe("player:reconnect");
+  request.ack?.({ status: "room_left", roomId: "room", playerSessionId: "session",
+    attemptId: request.data.attemptId });
+  expect(client.getSnapshot().identity).toBeNull();
+  expect(client.getSnapshot().room).toBeNull();
+  expect(selectRoomView(client.getSnapshot())).toBe("home");
+  expect(local.getItem(IDENTITY_KEY)).toBeNull();
+});

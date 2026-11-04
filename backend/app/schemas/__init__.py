@@ -25,6 +25,7 @@ from app.schemas.responses import (
     RecentAction,
     RoomCreateResponse,
     RoomJoinResponse,
+    RoomLeftRestoreResponse,
     RoomUpdatedEvent,
     TurnStartedEvent,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "RecentAction",
     "RoomCreateResponse",
     "RoomJoinResponse",
+    "RoomLeftRestoreResponse",
     "RoomUpdatedEvent",
     "TurnStartedEvent",
 ]

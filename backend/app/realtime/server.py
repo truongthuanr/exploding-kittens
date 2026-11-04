@@ -53,6 +53,7 @@ from app.modules.session import SessionNotFoundError, SessionService, SessionReg
 from app.modules.session.models import PlayerSession
 from app.realtime.admission import AdmissionCache, AdmissionError, EPOCH, TTL_MS
 from app.realtime.rematch import RematchReplayCache, RematchReplayError
+from app.realtime.leave import LeaveResultCache, LeaveReplayError
 from app.schemas.responses import BootstrapResponse, GameActionAck, RematchVoteAck
 from app.realtime.game_events import (
     to_public_game_state,
@@ -82,6 +83,7 @@ from app.schemas import (
     ReconnectRequest,
     RematchReadyRequest,
     RematchWithdrawRequest,
+    RoomLeftRestoreResponse,
     RoomCreateResponse,
     RoomCreateRequest,
     RoomJoinResponse,
@@ -109,6 +111,7 @@ sio = socketio.AsyncServer(
 gateway_lock = asyncio.Lock()
 admission_cache = AdmissionCache()
 rematch_cache = RematchReplayCache()
+leave_cache = LeaveResultCache()
 REMATCH_GRACE_MS = 120_000
 rematch_timers: dict[tuple[str, str], tuple[int, asyncio.Task]] = {}
 
@@ -715,6 +718,52 @@ async def handle_rematch_withdraw(sid: str, data: dict | None) -> dict | None:
     return await handle_rematch_vote(sid, data, False)
 
 
+@sio.on("room:leave")
+@serialized
+async def handle_room_leave(sid: str, data: dict | None) -> dict | None:
+    payload = await validate_socket_payload(sid, "room:leave", data)
+    if payload is None:
+        return None
+    try:
+        # A committed leave has already removed its socket binding and session.
+        replay = leave_cache.lookup_request(payload.playerSessionId, payload.requestId)
+        if replay is not None:
+            return replay.ack
+        session = await resolve_bound_session(sid, payload.requestId)
+        if session is None:
+            return None
+        if session.player_session_id != payload.playerSessionId:
+            await emit_socket_error(sid, "session_mismatch",
+                                    "Leave request belongs to another player session", payload.requestId)
+            return None
+        room = room_service.registry.get_by_id(session.room_id)
+        if room.status is not RoomStatus.FINISHED:
+            raise RoomNotFinishedError(room.room_id)
+        if room.get_player(session.player_id) is None:
+            raise PlayerNotInRoomError(session.player_id, room.room_id)
+        # Commit membership, session revocation, and the terminal result before any await.
+        room_service.remove_player(room.room_id, session.player_id)
+        session_service.registry.remove(session.player_session_id)
+        result = leave_cache.remember(session.player_session_id, room.room_id, payload.requestId)
+        sync_rematch_timers(room)
+        if room.players:
+            finish_rematch_if_unanimous(room)
+            advance_version(room.room_id)
+        else:
+            game_registry.remove(room.room_id)
+            room_action_locks.pop(room.room_id, None)
+            room_service.registry.remove(room.room_id)
+        await sio.leave_room(sid, room.room_id)
+        if room.players:
+            await emit_rematch_snapshot(room)
+        return result.ack
+    except LeaveReplayError as error:
+        await emit_socket_error(sid, error.code, str(error), payload.requestId)
+    except SERVICE_ERROR_TYPES as error:
+        await emit_service_error(sid, error, payload.requestId)
+    return None
+
+
 @sio.on("game:start")
 @serialized
 async def handle_game_start(sid: str, data: dict | None) -> None:
@@ -927,6 +976,12 @@ async def handle_player_reconnect(sid: str, data: dict | None) -> dict | None:
         return
 
     correlation = payload.attemptId
+    left = leave_cache.lookup_session(payload.playerSessionId)
+    if left is not None:
+        return RoomLeftRestoreResponse(
+            roomId=left.room_id, playerSessionId=payload.playerSessionId,
+            attemptId=correlation,
+        ).model_dump(mode="json")
     try:
         session = session_service.get_session(payload.playerSessionId)
         if session.client_instance_id is not None and (not payload.clientInstanceId or not payload.attemptId):

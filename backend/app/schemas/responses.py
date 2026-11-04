@@ -85,7 +85,15 @@ class RematchVoteAck(SocketResponseModel):
 class LeaveRoomAck(SocketResponseModel):
     requestId: str
     roomId: str
+    replayUntilMs: int
     status: Literal["room_left"] = "room_left"
+
+
+class RoomLeftRestoreResponse(SocketResponseModel):
+    status: Literal["room_left"] = "room_left"
+    roomId: str
+    playerSessionId: str
+    attemptId: str | None = None
 
 
 class PublicGameStateEvent(SocketResponseModel):

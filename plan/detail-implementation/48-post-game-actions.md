@@ -5,7 +5,7 @@ Give players a clear next step after a match: play another match with the same r
 ## Context and dependencies
 
 - `18-ui-game-play.md` already renders the authoritative result. Its scope explicitly defers rematch actions.
-- The Finished view currently has no CTA. Shared contracts define rematch and leave-room requests; the backend handles rematch voting, while leave-room handling and the UI remain pending.
+- The Finished view currently has no CTA. Shared contracts and backend handlers support rematch voting and leave-room; the Finished UI remains pending.
 - `plan/functional-spec.md` requires a finished room to support rematch or leaving. `plan/implementation-plan.md` places rematch in Phase 5.
 - Reuse the existing realtime client, room identity, view selector, and lobby screen. Do not create a second source of room state.
 
@@ -31,10 +31,10 @@ Give players a clear next step after a match: play another match with the same r
 - [x] Retain rematch request results for 10 minutes outside the game runtime, scoped to the player session and match. Replay the original result for the same ID and contents even after transition to `waiting`; return `request_conflict` if an ID is reused with different contents.
 - [x] Include each member's rematch choice and any disconnect grace deadline in authoritative room state and in reconnect/bootstrap snapshots so the Finished screen survives reload and reconnect.
 - [x] When a rematch vote or grace deadline changes the finished room's `stateVersion`, publish matching public game and per-player private snapshots at that version so the existing Finished selector stays synchronized. Let clients update the countdown locally from the server deadline; do not publish a snapshot every second.
-- [ ] Count all current room members in the vote. After the first vote, schedule removal for disconnected members using the 2-minute grace period; cancel removal on reconnect. A leave or timeout updates the voting set and rechecks consensus atomically. Keep the room `finished` until the server commits the transition.
+- [x] Count all current room members in the vote. After the first vote, schedule removal for disconnected members using the 2-minute grace period; cancel removal on reconnect. A leave or timeout updates the voting set and rechecks consensus atomically. Keep the room `finished` until the server commits the transition.
 - [x] On transition to `waiting`, clear prior game runtime and rematch choices before publishing the room snapshot; reset readiness and elimination state, keep remaining memberships and sessions, and make reconnect/bootstrap return null game/private state. The next match must get fresh private/public game state and action history.
-- [ ] Implement leave-room lifecycle for finished rooms. Notify remaining members, transfer host by the stated join-order rule, and close/retire an empty room. Remove the departed member's active socket binding and prevent that session from restoring as a room member.
-- [ ] Keep a 10-minute leave-result record so duplicate requests with the same session and request ID return the same terminal result after session removal. Return `room_left` when that session reconnects during the retention window; distinguish this from a still-valid session and from `invalid_session` after expiry or server restart.
+- [x] Implement leave-room lifecycle for finished rooms. Notify remaining members, transfer host by the stated join-order rule, and close/retire an empty room. Remove the departed member's active socket binding and prevent that session from restoring as a room member.
+- [x] Keep a 10-minute leave-result record so duplicate requests with the same session and request ID return the same terminal result after session removal. Return `room_left` when that session reconnects during the retention window; distinguish this from a still-valid session and from `invalid_session` after expiry or server restart.
 - [x] Reopen joining once the rematch returns the room to `waiting`. Keep the existing 3–5 player Start precondition and add tests for a rematch room with fewer than three members.
 
 ### 2. Realtime client and UI

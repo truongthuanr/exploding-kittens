@@ -76,7 +76,15 @@ export type RematchVoteAck = {
 export type LeaveRoomAck = {
   requestId: string;
   roomId: string;
+  replayUntilMs: number;
   status: "room_left";
+};
+
+export type RoomLeftRestoreResponse = {
+  status: "room_left";
+  roomId: string;
+  playerSessionId: string;
+  attemptId: string | null;
 };
 
 export type PublicGameStateEvent = {

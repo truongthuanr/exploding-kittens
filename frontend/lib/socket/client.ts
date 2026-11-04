@@ -1,7 +1,7 @@
 import { io, type Socket } from "socket.io-client";
 import type {
   BootstrapResponse, ClientToServerEvents, ErrorEvent, GameActionAck, PlayerPrivateStateEvent,
-  PublicGameStateEvent, RoomUpdatedEvent, ServerToClientEvents, SystemConnectedEvent,
+  PublicGameStateEvent, RoomLeftRestoreResponse, RoomUpdatedEvent, ServerToClientEvents, SystemConnectedEvent,
 } from "../../../shared/contracts";
 import { IDENTITY_KEY, INSTANCE_KEY, PENDING_KEY, SessionStorage, type Identity, type PendingAdmission } from "./storage";
 
@@ -181,9 +181,22 @@ export class RealtimeClient {
     this.update({ game, private: privateState, syncing: this.pairs.size > 0 });
     this.reconcileAction();
   }
-  private accept(value: BootstrapResponse | null | undefined, generation: number, attemptId?: string) {
+  private accept(value: BootstrapResponse | RoomLeftRestoreResponse | null | undefined,
+                 generation: number, attemptId?: string) {
     const op = this.operation;
     if (!op || op.generation !== generation || !this.socket.connected) return;
+    if (value && "status" in value && value.status === "room_left") {
+      const identity = this.state.identity;
+      if (op.kind !== "restore" || !identity || value.playerSessionId !== identity.playerSessionId ||
+          value.roomId !== identity.roomId || value.attemptId !== attemptId) {
+        this.fail("invalid_ack", "Room-left result belongs to another session", op.kind, true); return;
+      }
+      this.storage.clearIdentity(identity.playerSessionId);
+      this.cancel(); this.pairs.clear(); this.queuedRoom = null; this.clearAction();
+      this.update({ identity: null, room: null, game: null, private: null,
+        session: "none", syncing: false, error: null, outcome: "known" });
+      return;
+    }
     if (!validBootstrap(value) || (attemptId && value.attemptId !== attemptId)) {
       this.fail("invalid_ack", "The server did not return a valid bootstrap", op.kind, true); return;
     }
