@@ -3,12 +3,22 @@ import type { RoomCreateResponse, RoomCreateRequest, RoomJoinRequest } from "../
 export const IDENTITY_KEY = "boardgame.identity.v1";
 export const INSTANCE_KEY = "boardgame.instance.v1";
 export const PENDING_KEY = "boardgame.pending.v1";
+export const POST_GAME_KEY = "boardgame.post-game.v1";
 export type Identity = RoomCreateResponse & { version: 1 };
 export type PendingAdmission = {
   event: "room:create" | "room:join";
   payload: RoomCreateRequest | RoomJoinRequest;
   createdAt: number;
   expiresAt: number;
+};
+export type SavedPostGame = {
+  kind: "rematch-ready" | "rematch-withdraw" | "leave";
+  requestId: string;
+  roomId: string;
+  playerSessionId: string;
+  replayUntilServerMs: number;
+  status: "pending" | "unknown";
+  ackVersion: number | null;
 };
 export type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object";
@@ -23,6 +33,13 @@ export function isPending(v: unknown): v is PendingAdmission {
     (v.event !== "room:join" || nonempty(v.payload.roomCode)) &&
     typeof v.createdAt === "number" && Number.isFinite(v.createdAt) &&
     typeof v.expiresAt === "number" && Number.isFinite(v.expiresAt) && v.expiresAt > v.createdAt;
+}
+
+export function isSavedPostGame(v: unknown): v is SavedPostGame {
+  return record(v) && (v.kind === "rematch-ready" || v.kind === "rematch-withdraw" || v.kind === "leave") &&
+    [v.requestId, v.roomId, v.playerSessionId].every(nonempty) &&
+    Number.isSafeInteger(v.replayUntilServerMs) && (v.ackVersion === null || Number.isSafeInteger(v.ackVersion)) &&
+    (v.status === "pending" || v.status === "unknown");
 }
 
 /** Never persists snapshots or hands. Storage failures fall back to this tab's memory. */
@@ -62,6 +79,7 @@ export class SessionStorage {
   }
   identity() { return this.read(IDENTITY_KEY, isIdentity); }
   pending() { return this.read(PENDING_KEY, isPending); }
+  postGame() { return this.read(POST_GAME_KEY, isSavedPostGame); }
   instance(): string {
     const id = this.read(INSTANCE_KEY, nonempty) ?? crypto.randomUUID();
     this.write(INSTANCE_KEY, id);

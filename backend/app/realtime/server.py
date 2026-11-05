@@ -45,13 +45,16 @@ from app.modules.room.errors import (
     PlayersNotReadyError,
     RoomFullError,
     RoomNotFoundError,
+    RoomNotFinishedError,
     RoomNotJoinableError,
     RoomNotWaitingError,
 )
 from app.modules.session import SessionNotFoundError, SessionService, SessionRegistry
 from app.modules.session.models import PlayerSession
 from app.realtime.admission import AdmissionCache, AdmissionError, EPOCH, TTL_MS
-from app.schemas.responses import BootstrapResponse, GameActionAck
+from app.realtime.rematch import RematchReplayCache, RematchReplayError
+from app.realtime.leave import LeaveResultCache, LeaveReplayError
+from app.schemas.responses import BootstrapResponse, GameActionAck, RematchVoteAck
 from app.realtime.game_events import (
     to_public_game_state,
     to_player_private_state,
@@ -74,9 +77,13 @@ from app.schemas import (
     GamePhase,
     GameStartedEvent,
     GameStartRequest,
+    LeaveRoomRequest,
     PlayerStatus,
     PlayCardRequest,
     ReconnectRequest,
+    RematchReadyRequest,
+    RematchWithdrawRequest,
+    RoomLeftRestoreResponse,
     RoomCreateResponse,
     RoomCreateRequest,
     RoomJoinResponse,
@@ -103,6 +110,10 @@ sio = socketio.AsyncServer(
 # disconnect inside this lock: takeover first removes its binding.
 gateway_lock = asyncio.Lock()
 admission_cache = AdmissionCache()
+rematch_cache = RematchReplayCache()
+leave_cache = LeaveResultCache()
+REMATCH_GRACE_MS = 120_000
+rematch_timers: dict[tuple[str, str], tuple[int, asyncio.Task]] = {}
 
 
 def serialized(handler):
@@ -137,6 +148,84 @@ def bootstrap(session: PlayerSession, attempt_id: str | None = None) -> dict:
     ).model_dump(mode="json")
 
 
+def sync_rematch_timers(room) -> None:
+    expected = {
+        (room.room_id, member.player_id): member.rematch_grace_deadline_ms
+        for member in room.players
+        if room.status is RoomStatus.FINISHED and member.rematch_grace_deadline_ms is not None
+    }
+    for key, (deadline, task) in list(rematch_timers.items()):
+        if key[0] == room.room_id and expected.get(key) != deadline:
+            task.cancel()
+            del rematch_timers[key]
+    for key, deadline in expected.items():
+        if key not in rematch_timers:
+            rematch_timers[key] = (deadline, asyncio.create_task(expire_rematch_member(*key, deadline)))
+
+
+async def emit_rematch_snapshot(room) -> None:
+    await sio.emit("room:updated", to_room_updated_event(room).model_dump(mode="json"), room=room.room_id)
+    runtime = game_registry.get(room.room_id)
+    if room.status is RoomStatus.FINISHED and runtime is not None:
+        await emit_game_state(sio, runtime)
+        await emit_private_states(sio, session_service, runtime)
+
+
+def finish_rematch_if_unanimous(room) -> bool:
+    if room.status is not RoomStatus.FINISHED or not room_service.rematch_consensus(room):
+        return False
+    room.status = RoomStatus.WAITING
+    for member in room.players:
+        member.is_ready = False
+        member.rematch_ready = False
+        member.rematch_grace_deadline_ms = None
+        session = session_service.get_session_by_player(room.room_id, member.player_id)
+        member.status = (PlayerStatus.CONNECTED if session and session.connected
+                         else PlayerStatus.DISCONNECTED)
+    sync_rematch_timers(room)
+    game_registry.remove(room.room_id)
+    room_action_locks.pop(room.room_id, None)
+    return True
+
+
+async def expire_rematch_member(room_id: str, player_id: str, deadline: int) -> None:
+    try:
+        while remaining_ms := deadline - int(time() * 1000):
+            if remaining_ms <= 0:
+                break
+            await asyncio.sleep(remaining_ms / 1000)
+        async with gateway_lock:
+            room = room_service.registry.rooms_by_id.get(room_id)
+            if room is None or room.status is not RoomStatus.FINISHED:
+                return
+            member = room.get_player(player_id)
+            if (member is None or member.status is not PlayerStatus.DISCONNECTED
+                    or member.rematch_grace_deadline_ms != deadline
+                    or not any(player.rematch_ready for player in room.players)
+                    or int(time() * 1000) < deadline):
+                return
+            session = session_service.get_session_by_player(room_id, player_id)
+            if session is not None:
+                session_service.registry.remove(session.player_session_id)
+            room_service.remove_player(room_id, player_id)
+            rematch_timers.pop((room_id, player_id), None)
+            sync_rematch_timers(room)
+            if not room.players:
+                game_registry.remove(room_id)
+                room_service.registry.remove(room_id)
+                room_action_locks.pop(room_id, None)
+                return
+            finish_rematch_if_unanimous(room)
+            advance_version(room_id)
+            await emit_rematch_snapshot(room)
+    except asyncio.CancelledError:
+        return
+    finally:
+        current = rematch_timers.get((room_id, player_id))
+        if current and current[1] is asyncio.current_task():
+            del rematch_timers[(room_id, player_id)]
+
+
 async def bind_owner(
     session: PlayerSession, sid: str, instance: str | None, takeover: bool = False,
 ) -> None:
@@ -159,7 +248,10 @@ async def bind_owner(
         await sio.disconnect(old_sid)
     await sio.enter_room(sid, session.room_id)
     room = room_service.registry.get_by_id(session.room_id)
-    room.get_player(session.player_id).status = PlayerStatus.CONNECTED
+    member = room.get_player(session.player_id)
+    member.status = PlayerStatus.CONNECTED
+    member.rematch_grace_deadline_ms = None
+    sync_rematch_timers(room)
     runtime = game_registry.get(session.room_id)
     if runtime:
         for player in runtime.game_state.players:
@@ -167,7 +259,8 @@ async def bind_owner(
                 player.status = PlayerStatus.CONNECTED
     advance_version(session.room_id)
     await sio.emit("room:updated", to_room_updated_event(room).model_dump(), room=room.room_id)
-    if runtime and instance is not None:
+    if runtime and (instance is not None or (room.status is RoomStatus.FINISHED
+                                             and any(member.rematch_ready for member in room.players))):
         await emit_game_state(sio, runtime)
         await emit_private_states(sio, session_service, runtime)
 
@@ -176,6 +269,9 @@ REQUEST_MODELS: dict[str, type[BaseModel]] = {
     "room:create": RoomCreateRequest,
     "room:join": RoomJoinRequest,
     "room:ready": RoomReadyRequest,
+    "room:rematch-ready": RematchReadyRequest,
+    "room:rematch-withdraw": RematchWithdrawRequest,
+    "room:leave": LeaveRoomRequest,
     "game:start": GameStartRequest,
     "turn:play-card": PlayCardRequest,
     "turn:draw-card": DrawCardRequest,
@@ -189,6 +285,7 @@ ROOM_ERROR_CODES: dict[type[Exception], str] = {
     RoomFullError: "room_full",
     NotHostError: "not_host",
     RoomNotWaitingError: "room_not_waiting",
+    RoomNotFinishedError: "room_not_finished",
     PlayerNotInRoomError: "player_not_in_room",
     NotEnoughPlayersError: "not_enough_players",
     PlayersNotReadyError: "players_not_ready",
@@ -471,9 +568,14 @@ async def disconnect(sid: str, reason=None) -> None:
             for summary in runtime.game_state.players:
                 if summary.player_id == session.player_id and summary.status is not PlayerStatus.ELIMINATED:
                     summary.status = PlayerStatus.DISCONNECTED
+        if room.status is RoomStatus.FINISHED and any(member.rematch_ready for member in room.players):
+            player.rematch_grace_deadline_ms = int(time() * 1000) + REMATCH_GRACE_MS
+            sync_rematch_timers(room)
         advance_version(room.room_id)
         await sio.emit("room:updated", to_room_updated_event(room).model_dump(), room=room.room_id)
-        if runtime and session.client_instance_id is not None:
+        if runtime and (session.client_instance_id is not None or
+                        (room.status is RoomStatus.FINISHED
+                         and any(member.rematch_ready for member in room.players))):
             await emit_game_state(sio, runtime)
             await emit_private_states(sio, session_service, runtime)
 
@@ -559,6 +661,109 @@ async def handle_room_ready(sid: str, data: dict | None) -> None:
         await emit_service_error(sid, error)
 
 
+async def handle_rematch_vote(sid: str, data: dict | None, ready: bool) -> dict | None:
+    event = "room:rematch-ready" if ready else "room:rematch-withdraw"
+    payload = await validate_socket_payload(sid, event, data)
+    if payload is None:
+        return None
+    session = await resolve_bound_session(sid, payload.requestId)
+    if session is None:
+        return None
+    room = room_service.registry.rooms_by_id.get(session.room_id)
+    if room is None:
+        await emit_socket_error(sid, "room_not_found", "Room no longer exists", payload.requestId)
+        return None
+    choice = "ready" if ready else "withdrawn"
+    key = (session.player_session_id, room.room_id, room.match_number, payload.requestId)
+    try:
+        replay = rematch_cache.lookup(key, choice)
+        if replay is not None:
+            return replay.ack
+        if room.status is not RoomStatus.FINISHED:
+            raise RoomNotFinishedError(room.room_id)
+        member = room.get_player(session.player_id)
+        if member is None:
+            raise PlayerNotInRoomError(session.player_id, room.room_id)
+        if member.rematch_ready != ready:
+            room_service.set_rematch_vote(room.room_id, session.player_id, ready,
+                                          int(time() * 1000), REMATCH_GRACE_MS)
+            finish_rematch_if_unanimous(room)
+            sync_rematch_timers(room)
+            advance_version(room.room_id)
+            ack = RematchVoteAck(requestId=payload.requestId, stateVersion=room.state_version,
+                                 choice=choice).model_dump()
+            rematch_cache.remember(key, choice, ack)
+            await emit_rematch_snapshot(room)
+            return ack
+        ack = RematchVoteAck(requestId=payload.requestId, stateVersion=room.state_version,
+                             choice=choice).model_dump()
+        rematch_cache.remember(key, choice, ack)
+        return ack
+    except RematchReplayError as error:
+        await emit_socket_error(sid, error.code, str(error), payload.requestId)
+    except SERVICE_ERROR_TYPES as error:
+        await emit_service_error(sid, error, payload.requestId)
+    return None
+
+
+@sio.on("room:rematch-ready")
+@serialized
+async def handle_rematch_ready(sid: str, data: dict | None) -> dict | None:
+    return await handle_rematch_vote(sid, data, True)
+
+
+@sio.on("room:rematch-withdraw")
+@serialized
+async def handle_rematch_withdraw(sid: str, data: dict | None) -> dict | None:
+    return await handle_rematch_vote(sid, data, False)
+
+
+@sio.on("room:leave")
+@serialized
+async def handle_room_leave(sid: str, data: dict | None) -> dict | None:
+    payload = await validate_socket_payload(sid, "room:leave", data)
+    if payload is None:
+        return None
+    try:
+        # A committed leave has already removed its socket binding and session.
+        replay = leave_cache.lookup_request(payload.playerSessionId, payload.requestId)
+        if replay is not None:
+            return replay.ack
+        session = await resolve_bound_session(sid, payload.requestId)
+        if session is None:
+            return None
+        if session.player_session_id != payload.playerSessionId:
+            await emit_socket_error(sid, "session_mismatch",
+                                    "Leave request belongs to another player session", payload.requestId)
+            return None
+        room = room_service.registry.get_by_id(session.room_id)
+        if room.status is not RoomStatus.FINISHED:
+            raise RoomNotFinishedError(room.room_id)
+        if room.get_player(session.player_id) is None:
+            raise PlayerNotInRoomError(session.player_id, room.room_id)
+        # Commit membership, session revocation, and the terminal result before any await.
+        room_service.remove_player(room.room_id, session.player_id)
+        session_service.registry.remove(session.player_session_id)
+        result = leave_cache.remember(session.player_session_id, room.room_id, payload.requestId)
+        sync_rematch_timers(room)
+        if room.players:
+            finish_rematch_if_unanimous(room)
+            advance_version(room.room_id)
+        else:
+            game_registry.remove(room.room_id)
+            room_action_locks.pop(room.room_id, None)
+            room_service.registry.remove(room.room_id)
+        await sio.leave_room(sid, room.room_id)
+        if room.players:
+            await emit_rematch_snapshot(room)
+        return result.ack
+    except LeaveReplayError as error:
+        await emit_socket_error(sid, error.code, str(error), payload.requestId)
+    except SERVICE_ERROR_TYPES as error:
+        await emit_service_error(sid, error, payload.requestId)
+    return None
+
+
 @sio.on("game:start")
 @serialized
 async def handle_game_start(sid: str, data: dict | None) -> None:
@@ -587,6 +792,7 @@ async def handle_game_start(sid: str, data: dict | None) -> None:
         runtime = GameRuntimeState.from_setup_result(setup_result)
         game_registry.add(runtime)
         room.status = RoomStatus.IN_GAME
+        room.match_number += 1
         advance_version(room.room_id)
         await sio.emit(
             "room:updated",
@@ -770,6 +976,12 @@ async def handle_player_reconnect(sid: str, data: dict | None) -> dict | None:
         return
 
     correlation = payload.attemptId
+    left = leave_cache.lookup_session(payload.playerSessionId)
+    if left is not None:
+        return RoomLeftRestoreResponse(
+            roomId=left.room_id, playerSessionId=payload.playerSessionId,
+            attemptId=correlation,
+        ).model_dump(mode="json")
     try:
         session = session_service.get_session(payload.playerSessionId)
         if session.client_instance_id is not None and (not payload.clientInstanceId or not payload.attemptId):

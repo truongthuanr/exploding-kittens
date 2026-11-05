@@ -30,6 +30,22 @@ class RoomReadyRequest(SocketRequestModel):
     isReady: bool
 
 
+class PostGameRequest(SocketRequestModel):
+    requestId: str = Field(min_length=1, max_length=180)
+
+
+class RematchReadyRequest(PostGameRequest):
+    pass
+
+
+class RematchWithdrawRequest(PostGameRequest):
+    pass
+
+
+class LeaveRoomRequest(PostGameRequest):
+    playerSessionId: str = Field(min_length=1, max_length=128)
+
+
 class GameStartRequest(SocketRequestModel):
     requestId: str | None = None
 

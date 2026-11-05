@@ -108,3 +108,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .site-header { flex-wrap: wrap; }
   .game-actions > button, .favor-picker .button-row button { width: 100%; }
 }
+
+.rematch-players { list-style: none; padding: 0; margin: 12px 0 16px; border-top: 1px solid #d8e0e5; }
+.rematch-players .player { flex-wrap: wrap; gap: 8px 16px; }

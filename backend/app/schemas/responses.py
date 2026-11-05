@@ -29,6 +29,8 @@ class RoomPlayer(SocketResponseModel):
     isReady: bool
     isHost: bool
     status: PlayerStatus
+    rematchReady: bool = False
+    rematchGraceDeadlineMs: int | None = None
 
 
 class RoomUpdatedEvent(SocketResponseModel):
@@ -72,6 +74,26 @@ class ActionHistoryEntry(RecentAction):
 class GameActionAck(SocketResponseModel):
     requestId: str
     stateVersion: int
+
+
+class RematchVoteAck(SocketResponseModel):
+    requestId: str
+    stateVersion: int
+    choice: Literal["ready", "withdrawn"]
+
+
+class LeaveRoomAck(SocketResponseModel):
+    requestId: str
+    roomId: str
+    replayUntilMs: int
+    status: Literal["room_left"] = "room_left"
+
+
+class RoomLeftRestoreResponse(SocketResponseModel):
+    status: Literal["room_left"] = "room_left"
+    roomId: str
+    playerSessionId: str
+    attemptId: str | None = None
 
 
 class PublicGameStateEvent(SocketResponseModel):

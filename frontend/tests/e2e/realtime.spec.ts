@@ -285,6 +285,51 @@ test("three players finish a deterministic match and restore the result", async 
       await expect(page.getByRole("heading", { name: "Trận đấu đã kết thúc" })).toBeVisible();
       await expect(page.locator(".final-player")).toHaveCount(3);
     }
+    const playAgain = pages[0].getByRole("button", { name: "Play Again", exact: true });
+    await playAgain.focus();
+    await expect(playAgain).toBeFocused();
+    expect(await playAgain.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe("none");
+    await playAgain.click();
+    for (const page of pages) await expect(page.getByText("1 / 3 người chơi đã đồng ý.")).toBeVisible();
+    await pages[0].reload();
+    await expect(pages[0].getByRole("button", { name: "Rút phiếu Play Again" })).toBeEnabled();
+    await pages[0].getByRole("button", { name: "Rút phiếu Play Again" }).click();
+    for (const page of pages) await expect(page.getByText("0 / 3 người chơi đã đồng ý.")).toBeVisible();
+    for (const page of pages) await page.getByRole("button", { name: "Play Again", exact: true }).click();
+    for (const page of pages) {
+      await expect(page.getByRole("heading", { name: /Room [A-Z0-9]+/ })).toBeVisible();
+      await expect(page.locator(".public-action-log-list li")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Ready", exact: true })).toBeEnabled();
+      if (page === pages[0]) await expect(page.getByRole("button", { name: "Start game" })).toBeDisabled();
+      await page.getByRole("button", { name: "Ready", exact: true }).click();
+    }
+    await expect(pages[0].getByRole("button", { name: "Start game" })).toBeEnabled();
+    await pages[0].getByRole("button", { name: "Start game" }).click();
+    for (const page of pages) {
+      await expect(page.getByRole("heading", { name: "Trận đấu đã bắt đầu" })).toBeVisible();
+      await expect(page.locator(".public-action-log-list li")).toHaveCount(1);
+      await expect(page.locator(".hand-card").first()).toBeVisible();
+    }
+    for (let draw = 0; draw < 100; draw++) {
+      if (await pages[0].getByRole("heading", { name: "Trận đấu đã kết thúc" }).isVisible()) break;
+      let active: Page | undefined;
+      for (const page of pages) {
+        if (await page.getByText("Đến lượt bạn.", { exact: true }).isVisible()) { active = page; break; }
+      }
+      expect(active, `active player in rematch before draw ${draw + 1}`).toBeDefined();
+      const lastVersion = Number(await active!.locator(".public-action-log-list li").last().getAttribute("data-state-version"));
+      await active!.getByRole("button", { name: "Rút bài" }).click();
+      await expect.poll(async () => Number(await active!.locator(".public-action-log-list li").last().getAttribute("data-state-version")))
+        .toBeGreaterThan(lastVersion);
+    }
+    for (const page of pages) await expect(page.getByRole("heading", { name: "Trận đấu đã kết thúc" })).toBeVisible();
+    await pages[0].getByRole("button", { name: "Leave Room" }).click();
+    await expect(pages[0].getByRole("heading", { name: "Chơi cùng bạn bè" })).toBeVisible();
+    expect(await pages[0].evaluate(() => localStorage.getItem("boardgame.identity.v1"))).toBeNull();
+    for (const page of pages.slice(1)) {
+      await expect(page.locator(".rematch-players .player")).toHaveCount(2);
+      await expect(page.getByRole("heading", { name: "Trận đấu đã kết thúc" })).toBeVisible();
+    }
   } finally { await Promise.all(contexts.map(context => context.close())); }
 });
 

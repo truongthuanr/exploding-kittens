@@ -1,9 +1,10 @@
 import { io, type Socket } from "socket.io-client";
 import type {
-  BootstrapResponse, ClientToServerEvents, ErrorEvent, GameActionAck, PlayerPrivateStateEvent,
-  PublicGameStateEvent, RoomUpdatedEvent, ServerToClientEvents, SystemConnectedEvent,
+  BootstrapResponse, ClientToServerEvents, ErrorEvent, GameActionAck, LeaveRoomAck, PlayerPrivateStateEvent,
+  PublicGameStateEvent, RematchVoteAck, RoomLeftRestoreResponse, RoomUpdatedEvent, ServerToClientEvents, SystemConnectedEvent,
 } from "../../../shared/contracts";
-import { IDENTITY_KEY, INSTANCE_KEY, PENDING_KEY, SessionStorage, type Identity, type PendingAdmission } from "./storage";
+import { IDENTITY_KEY, INSTANCE_KEY, PENDING_KEY, POST_GAME_KEY, SessionStorage,
+  type Identity, type PendingAdmission, type SavedPostGame } from "./storage";
 
 export type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 export type SessionStatus = "none" | "joining" | "join_failed" | "ready" | "restoring" | "restore_failed" | "invalid" | "replaced";
@@ -13,6 +14,7 @@ export type PendingGameAction = {
   status: "pending" | "unknown";
   confirmedStateVersion: number | null;
 };
+export type PendingPostGame = SavedPostGame & { restored: boolean };
 export type RealtimeState = {
   connection: "disconnected" | "connecting" | "connected" | "reconnecting";
   session: SessionStatus;
@@ -27,14 +29,18 @@ export type RealtimeState = {
   storageDegraded: boolean;
   pendingAdmission: boolean;
   pendingAction: PendingGameAction | null;
+  pendingPostGame: PendingPostGame | null;
+  serverTimeOffsetMs: number;
   lastEvent: string | null;
 };
 export const EMPTY_STATE: RealtimeState = {
   connection: "disconnected", session: "none", identity: null, room: null, game: null, private: null,
   syncing: false, error: null, connectionError: null, outcome: null, storageDegraded: false,
-  pendingAdmission: false, pendingAction: null, lastEvent: null,
+  pendingAdmission: false, pendingAction: null, pendingPostGame: null, serverTimeOffsetMs: 0, lastEvent: null,
 };
 type Pair = { game?: PublicGameStateEvent; private?: PlayerPrivateStateEvent };
+type PostGameOperation = SavedPostGame & { restored: boolean; timer?: ReturnType<typeof setTimeout> };
+const POST_GAME_REPLAY_MS = 600_000;
 type Operation = { id: string; generation: number; kind: "join" | "restore"; timer: ReturnType<typeof setTimeout> };
 type ActionOperation = {
   id: string;
@@ -73,14 +79,22 @@ export class RealtimeClient {
   private queuedRoom: RoomUpdatedEvent | null = null;
   private actionIds = new Set<string>();
   private action?: ActionOperation;
+  private postGame?: PostGameOperation;
   private takeoverOnConnect = false;
 
   constructor(readonly socket: GameSocket, private storage: SessionStorage, private timeoutMs = 10_000) {
     this.instance = storage.instance();
     this.pending = storage.pending();
-    this.state = { ...EMPTY_STATE, identity: storage.identity(),
+    const identity = storage.identity();
+    const saved = storage.postGame();
+    if (saved && identity?.roomId === saved.roomId && identity.playerSessionId === saved.playerSessionId) {
+      this.postGame = { ...saved, status: "unknown", restored: false };
+      this.storage.write(POST_GAME_KEY, this.postGameRecord());
+    } else if (saved) this.storage.remove(POST_GAME_KEY);
+    this.state = { ...EMPTY_STATE, identity,
       session: this.pending ? "join_failed" : "none", pendingAdmission: !!this.pending,
-      outcome: this.pending ? "unknown" : null, storageDegraded: storage.degraded };
+      pendingPostGame: this.postGameView(),
+      outcome: this.pending || this.postGame ? "unknown" : null, storageDegraded: storage.degraded };
   }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -100,6 +114,7 @@ export class RealtimeClient {
   }
   private begin(id: string, kind: "join" | "restore") {
     if (kind === "restore" && this.action) this.markActionUnknown();
+    if (kind === "restore" && this.postGame?.status === "pending") this.markPostGameUnknown();
     this.cancel();
     const generation = this.generation;
     this.operation = { id, kind, generation, timer: setTimeout(() => {
@@ -124,6 +139,7 @@ export class RealtimeClient {
     const disconnected = () => {
       const kind = this.operation?.kind;
       if (this.action) this.markActionUnknown();
+      if (this.postGame) this.markPostGameUnknown();
       this.cancel(); this.hello = undefined;
       this.update({ connection: "disconnected", syncing: true,
         ...(this.state.session !== "replaced" ? { session: kind === "join" ? "join_failed" as const :
@@ -135,7 +151,10 @@ export class RealtimeClient {
     this.socket.on("connect", connected).on("disconnect", disconnected).on("connect_error", connectError);
     this.socket.io.on("reconnect_attempt", reconnecting);
     this.cleanup.push(() => { this.socket.off("connect", connected).off("disconnect", disconnected).off("connect_error", connectError); this.socket.io.off("reconnect_attempt", reconnecting); });
-    this.listen("system:connected", hello => { this.hello = hello; this.helloReceivedAt = Date.now(); });
+    this.listen("system:connected", hello => {
+      this.hello = hello; this.helloReceivedAt = Date.now();
+      this.update({ serverTimeOffsetMs: hello.serverTime - this.helloReceivedAt });
+    });
     this.listen("room:updated", room => {
       this.update({ lastEvent: "room:updated" });
       if (this.operation) { if (!this.queuedRoom || room.stateVersion >= this.queuedRoom.stateVersion) this.queuedRoom = room; }
@@ -153,17 +172,24 @@ export class RealtimeClient {
     this.socket.connect();
   }
   stop() {
-    this.cancel(); this.clearAction(); this.running = false;
+    this.cancel(); this.clearAction();
+    if (this.postGame) this.markPostGameUnknown();
+    this.running = false;
     this.cleanup.splice(0).forEach(fn => fn());
     this.socket.disconnect(); this.hello = undefined;
     this.update({ connection: "disconnected" });
   }
   private applyRoom(room: RoomUpdatedEvent) {
     if (room.roomId !== this.state.identity?.roomId || room.stateVersion < (this.state.room?.stateVersion ?? -1)) return;
-    this.update({ room });
+    if (room.status === "waiting" && this.state.room?.status === "finished") {
+      this.pairs.clear();
+      this.update({ room, game: null, private: null, syncing: false });
+    } else this.update({ room });
+    this.reconcilePostGame();
   }
   private receivePair(version: number, incoming: Pair) {
     if (this.state.session !== "ready" && !this.operation) return;
+    if (!this.operation && this.state.room?.status === "waiting") return;
     if (!Number.isSafeInteger(version) || version < (this.state.game?.stateVersion ?? -1)) return;
     this.pairs.set(version, { ...this.pairs.get(version), ...incoming });
     if (this.pairs.size > 64) { this.pairs.clear(); this.fail("sync_overflow", "State updates require a fresh restore", "restore"); return; }
@@ -180,10 +206,21 @@ export class RealtimeClient {
     for (const version of this.pairs.keys()) if (version <= (game?.stateVersion ?? -1)) this.pairs.delete(version);
     this.update({ game, private: privateState, syncing: this.pairs.size > 0 });
     this.reconcileAction();
+    this.reconcilePostGame();
   }
-  private accept(value: BootstrapResponse | null | undefined, generation: number, attemptId?: string) {
+  private accept(value: BootstrapResponse | RoomLeftRestoreResponse | null | undefined,
+                 generation: number, attemptId?: string) {
     const op = this.operation;
     if (!op || op.generation !== generation || !this.socket.connected) return;
+    if (value && "status" in value && value.status === "room_left") {
+      const identity = this.state.identity;
+      if (op.kind !== "restore" || !identity || value.playerSessionId !== identity.playerSessionId ||
+          value.roomId !== identity.roomId || value.attemptId !== attemptId) {
+        this.fail("invalid_ack", "Room-left result belongs to another session", op.kind, true); return;
+      }
+      this.finishLeave(identity);
+      return;
+    }
     if (!validBootstrap(value) || (attemptId && value.attemptId !== attemptId)) {
       this.fail("invalid_ack", "The server did not return a valid bootstrap", op.kind, true); return;
     }
@@ -195,12 +232,18 @@ export class RealtimeClient {
     this.storage.write(IDENTITY_KEY, identity);
     if (op.kind === "join") { this.pending = null; this.storage.remove(PENDING_KEY); }
     if (op.kind === "restore" && this.action?.status === "unknown") this.action.restored = true;
+    if (op.kind === "restore" && this.postGame?.status === "unknown") this.postGame.restored = true;
     this.cancel();
     this.update({ identity, room: value.room, game: value.game, private: value.private,
       session: "ready", syncing: false, pendingAdmission: !!this.pending, error: null, outcome: "known" });
     if (this.queuedRoom) this.applyRoom(this.queuedRoom);
     this.queuedRoom = null;
-    this.flushPairs();
+    if (value.room.status === "waiting") {
+      this.pairs.clear();
+      this.update({ game: null, private: null, syncing: false });
+    } else this.flushPairs();
+    this.update({ pendingPostGame: this.postGameView() });
+    this.reconcilePostGame();
     if (value.requiresTakeover) this.replaced("Identity recovered; choose Continue in this tab to take over");
   }
   private receiveError(error: ErrorEvent) {
@@ -209,10 +252,19 @@ export class RealtimeClient {
       if (error.code === "session_in_use") { this.replaced(error.message); return; }
       if (error.code === "invalid_session") {
         if (this.state.identity) this.storage.clearIdentity(this.state.identity.playerSessionId);
-        this.cancel(); this.pairs.clear(); this.clearAction();
+        this.cancel(); this.pairs.clear(); this.clearAction(); this.clearPostGame();
         this.update({ identity: null, room: null, game: null, private: null, session: "invalid", error, syncing: false }); return;
       }
       this.fail(error.code, error.message, op.kind); return;
+    }
+    if (error.requestId && this.postGame?.requestId === error.requestId) {
+      if (error.code === "invalid_session" && this.state.identity) {
+        this.storage.clearIdentity(this.state.identity.playerSessionId);
+        this.clearPostGame(); this.pairs.clear(); this.queuedRoom = null;
+        this.update({ identity: null, room: null, game: null, private: null,
+          session: "invalid", syncing: false, error, outcome: "known" });
+      } else if (!this.operation) this.clearPostGame({ error, outcome: "known" });
+      return;
     }
     if (error.requestId && this.action?.id === error.requestId) {
       if (!this.operation) this.clearAction({ error, outcome: "known" });
@@ -222,6 +274,7 @@ export class RealtimeClient {
   }
   private replaced(message: string) {
     this.cancel(); this.pairs.clear(); this.clearAction();
+    if (this.postGame) this.markPostGameUnknown();
     this.socket.io.reconnection(false);
     this.update({ session: "replaced", private: null, game: null, room: null, syncing: true,
       error: { code: "session_in_use", message }, outcome: "known" });
@@ -295,7 +348,144 @@ export class RealtimeClient {
     this.socket.disconnect(); this.socket.connect();
     this.update({ session: "none", pendingAdmission: false, outcome: null, error: null });
   };
+  private postGameRecord(): SavedPostGame {
+    const op = this.postGame!;
+    return { kind: op.kind, requestId: op.requestId, roomId: op.roomId,
+      playerSessionId: op.playerSessionId, replayUntilServerMs: op.replayUntilServerMs,
+      status: op.status, ackVersion: op.ackVersion };
+  }
+  private postGameView(): PendingPostGame | null {
+    return this.postGame ? { ...this.postGameRecord(), restored: this.postGame.restored } : null;
+  }
+  private savePostGame() {
+    if (this.postGame) this.storage.write(POST_GAME_KEY, this.postGameRecord());
+    this.update({ pendingPostGame: this.postGameView() });
+  }
+  private clearPostGame(patch: Partial<RealtimeState> = {}) {
+    if (this.postGame?.timer) clearTimeout(this.postGame.timer);
+    this.postGame = undefined;
+    this.storage.remove(POST_GAME_KEY);
+    this.update({ pendingPostGame: null, ...patch });
+  }
+  private markPostGameUnknown() {
+    if (!this.postGame) return;
+    if (this.postGame.timer) clearTimeout(this.postGame.timer);
+    this.postGame.timer = undefined;
+    this.postGame.status = "unknown";
+    this.postGame.restored = false;
+    this.savePostGame();
+    this.update({ outcome: "unknown", error: { code: "post_game_unknown",
+      message: "Chưa xác nhận được yêu cầu sau trận. Hãy khôi phục phiên trước khi thử lại.",
+      requestId: this.postGame.requestId } });
+  }
+  private serverNow(): number | null {
+    return this.hello ? this.hello.serverTime + Date.now() - this.helloReceivedAt : null;
+  }
+  private canSendPostGame(): boolean {
+    const { identity, room, game, private: privateState } = this.state;
+    return this.socket.connected && this.state.session === "ready" && !this.state.syncing &&
+      !this.state.pendingAdmission && !this.action && !this.postGame && !!identity && !!room &&
+      !!game && !!privateState && room.roomId === identity.roomId && room.status === "finished" &&
+      game.phase === "finished" && game.stateVersion === privateState.stateVersion &&
+      game.stateVersion >= room.stateVersion && privateState.playerId === identity.playerId &&
+      room.players.some(player => player.playerId === identity.playerId);
+  }
+  private sendPostGame(op: PostGameOperation) {
+    op.status = "pending";
+    op.restored = false;
+    if (op.timer) clearTimeout(op.timer);
+    op.timer = setTimeout(() => {
+      if (this.postGame === op && op.status === "pending") {
+        this.markPostGameUnknown();
+        this.retryRestore();
+      }
+    }, this.timeoutMs);
+    this.savePostGame();
+    this.update({ error: null, outcome: null });
+    if (op.kind === "leave") {
+      this.socket.emit("room:leave", { playerSessionId: op.playerSessionId, requestId: op.requestId },
+        ack => this.receiveLeaveAck(op, ack));
+    } else {
+      const event = op.kind === "rematch-ready" ? "room:rematch-ready" : "room:rematch-withdraw";
+      this.socket.emit(event, { requestId: op.requestId }, ack => this.receiveRematchAck(op, ack));
+    }
+  }
+  private receiveRematchAck(op: PostGameOperation, ack?: RematchVoteAck | null) {
+    if (this.postGame !== op || ack == null) return;
+    const choice = op.kind === "rematch-ready" ? "ready" : "withdrawn";
+    if (ack.requestId !== op.requestId || ack.choice !== choice ||
+        !Number.isSafeInteger(ack.stateVersion) || ack.stateVersion < 0) {
+      this.markPostGameUnknown(); this.retryRestore(); return;
+    }
+    op.ackVersion = ack.stateVersion;
+    this.savePostGame();
+    this.reconcilePostGame();
+  }
+  private receiveLeaveAck(op: PostGameOperation, ack?: LeaveRoomAck | null) {
+    if (this.postGame !== op || ack == null) return;
+    if (ack.requestId !== op.requestId || ack.roomId !== op.roomId || ack.status !== "room_left" ||
+        !Number.isSafeInteger(ack.replayUntilMs)) {
+      this.markPostGameUnknown(); this.retryRestore(); return;
+    }
+    const identity = this.state.identity;
+    if (identity && identity.playerSessionId === op.playerSessionId) this.finishLeave(identity);
+  }
+  private finishLeave(identity: Identity) {
+    this.storage.clearIdentity(identity.playerSessionId);
+    this.cancel(); this.pairs.clear(); this.queuedRoom = null; this.clearAction(); this.clearPostGame();
+    this.update({ identity: null, room: null, game: null, private: null,
+      session: "none", syncing: false, error: null, outcome: "known" });
+  }
+  private reconcilePostGame() {
+    const op = this.postGame;
+    const room = this.state.room;
+    if (!op || !room || room.roomId !== op.roomId || op.kind === "leave") return;
+    if (room.status === "waiting") { this.clearPostGame({ error: null, outcome: "known" }); return; }
+    if (room.status !== "finished") return;
+    const local = room.players.find(player => player.playerId === this.state.identity?.playerId);
+    const desired = op.kind === "rematch-ready";
+    if (local?.rematchReady === desired &&
+        ((op.ackVersion !== null && room.stateVersion >= op.ackVersion) ||
+         (op.status === "unknown" && op.restored))) {
+      this.clearPostGame({ error: null, outcome: "known" });
+    }
+  }
+  private startPostGame(kind: SavedPostGame["kind"]): string | null {
+    if (!this.canSendPostGame()) return null;
+    const now = this.serverNow();
+    const identity = this.state.identity!;
+    if (now === null) return null;
+    const op: PostGameOperation = { kind, requestId: crypto.randomUUID(), roomId: identity.roomId,
+      playerSessionId: identity.playerSessionId, replayUntilServerMs: now + POST_GAME_REPLAY_MS,
+      status: "pending", ackVersion: null, restored: false };
+    this.postGame = op;
+    this.sendPostGame(op);
+    return op.requestId;
+  }
+  rematchReady = (): string | null => this.startPostGame("rematch-ready");
+  rematchWithdraw = (): string | null => this.startPostGame("rematch-withdraw");
+  leaveRoom = (): string | null => this.startPostGame("leave");
+  retryPostGame = (): string | null => {
+    const op = this.postGame;
+    const now = this.serverNow();
+    if (!op || op.status !== "unknown" || !op.restored || now === null ||
+        this.state.session !== "ready" || !this.socket.connected || this.operation ||
+        this.state.identity?.playerSessionId !== op.playerSessionId) return null;
+    if (now >= op.replayUntilServerMs) {
+      const kind = op.kind;
+      if (this.state.room?.status !== "finished") {
+        this.clearPostGame({ error: { code: "room_not_finished",
+          message: "Phòng đã chuyển trạng thái; yêu cầu sau trận không thể gửi lại." }, outcome: "known" });
+        return null;
+      }
+      this.clearPostGame();
+      return this.startPostGame(kind);
+    }
+    this.sendPostGame(op);
+    return op.requestId;
+  };
   private canAct() {
+    if (this.postGame) return false;
     if (this.socket.connected && this.state.session === "ready" && !this.state.syncing &&
         (this.state.room?.status === "waiting" || this.state.game && this.state.private)) return true;
     this.update({ error: { code: "not_ready", message: "Wait until your session is synchronized" } }); return false;

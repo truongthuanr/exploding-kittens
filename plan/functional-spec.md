@@ -365,7 +365,7 @@ Cho phép cùng nhóm người chơi bắt đầu ván mới sau khi ván cũ k�
 ### Luồng chính
 
 - Người chơi gửi tín hiệu rematch ready.
-- Khi tất cả người chơi còn trong room đồng ý, room reset về `waiting` hoặc trực tiếp `starting` tùy implementation.
+- Khi tất cả người chơi còn trong room đồng ý, room reset về `waiting`; người chơi Ready lại và host Start ván mới theo điều kiện của lobby.
 - Server xóa game state cũ, giữ membership room, reset readiness.
 
 ### Business rules

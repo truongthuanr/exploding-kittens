@@ -16,6 +16,7 @@ from app.modules.room.errors import (
     PlayersNotReadyError,
     RoomFullError,
     RoomNotFoundError,
+    RoomNotFinishedError,
     RoomNotJoinableError,
     RoomNotWaitingError,
 )
@@ -95,6 +96,43 @@ class RoomService:
     def transition_to_starting(self, room_id: str, player_id: str) -> RoomState:
         room = self.validate_start_preconditions(room_id, player_id)
         room.status = RoomStatus.STARTING
+        return room
+
+    def set_rematch_vote(self, room_id: str, player_id: str, ready: bool, now_ms: int, grace_ms: int) -> RoomState:
+        room = self.registry.get_by_id(room_id)
+        if room.status is not RoomStatus.FINISHED:
+            raise RoomNotFinishedError(room_id)
+        player = room.get_player(player_id)
+        if player is None:
+            raise PlayerNotInRoomError(player_id, room_id)
+        had_votes = any(member.rematch_ready for member in room.players)
+        player.rematch_ready = ready
+        has_votes = any(member.rematch_ready for member in room.players)
+        if not has_votes:
+            for member in room.players:
+                member.rematch_grace_deadline_ms = None
+        elif not had_votes:
+            for member in room.players:
+                if member.status is PlayerStatus.DISCONNECTED:
+                    member.rematch_grace_deadline_ms = now_ms + grace_ms
+        return room
+
+    def rematch_consensus(self, room: RoomState) -> bool:
+        return bool(room.players) and all(member.rematch_ready for member in room.players)
+
+    def remove_player(self, room_id: str, player_id: str) -> RoomState:
+        room = self.registry.get_by_id(room_id)
+        if room.get_player(player_id) is None:
+            raise PlayerNotInRoomError(player_id, room_id)
+        room.players = [member for member in room.players if member.player_id != player_id]
+        if not any(member.rematch_ready for member in room.players):
+            for member in room.players:
+                member.rematch_grace_deadline_ms = None
+        if room.players and room.host_player_id == player_id:
+            room.host_player_id = next(
+                (member.player_id for member in room.players if member.status is PlayerStatus.CONNECTED),
+                room.players[0].player_id,
+            )
         return room
 
     def _generate_room_id(self) -> str:

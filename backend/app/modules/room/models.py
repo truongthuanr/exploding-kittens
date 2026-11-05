@@ -13,6 +13,8 @@ class RoomPlayerState:
     nickname: str
     is_ready: bool = False
     status: PlayerStatus = PlayerStatus.CONNECTED
+    rematch_ready: bool = False
+    rematch_grace_deadline_ms: int | None = None
 
 
 @dataclass(slots=True)
@@ -22,6 +24,7 @@ class RoomState:
     host_player_id: str
     players: list[RoomPlayerState]
     state_version: int = 0
+    match_number: int = 0
     status: RoomStatus = RoomStatus.WAITING
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 

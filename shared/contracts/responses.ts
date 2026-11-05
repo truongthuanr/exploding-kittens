@@ -20,6 +20,8 @@ export type RoomPlayer = {
   isReady: boolean;
   isHost: boolean;
   status: PlayerStatus;
+  rematchReady: boolean;
+  rematchGraceDeadlineMs: number | null;
 };
 
 export type RoomUpdatedEvent = {
@@ -63,6 +65,26 @@ export type ActionHistoryEntry = RecentAction & {
 export type GameActionAck = {
   requestId: string;
   stateVersion: number;
+};
+
+export type RematchVoteAck = {
+  requestId: string;
+  stateVersion: number;
+  choice: "ready" | "withdrawn";
+};
+
+export type LeaveRoomAck = {
+  requestId: string;
+  roomId: string;
+  replayUntilMs: number;
+  status: "room_left";
+};
+
+export type RoomLeftRestoreResponse = {
+  status: "room_left";
+  roomId: string;
+  playerSessionId: string;
+  attemptId: string | null;
 };
 
 export type PublicGameStateEvent = {
